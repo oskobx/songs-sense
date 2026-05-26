@@ -75,28 +75,36 @@ For each year:
 
 ### Scoring per source
 
-Each source contributes points to a song's combined score:
+Each source contributes a normalized, weighted score based on the song's rank within that source's chart:
 
-| Source | Formula | Max per song |
+```
+normalized_score = (CHART_LENGTH + 1 - rank) / CHART_LENGTH    # always in (0, 1]
+weighted_score = normalized_score × source_weight
+```
+
+Source weights:
+
+| Source | Weight | Notes |
 |---|---|---|
-| Billboard Hot 100 | `(101 - rank)` | 100 |
-| Billboard genre chart | `(51 - rank) * 0.8` (note rank is 1-25 or 1-50; use min) | 40 |
-| Spotify Global | `(101 - rank) * 0.8` (cap rank at 100) | 80 |
-| Spotify UK | `(101 - rank) * 0.5` | 50 |
-| Spotify US (bonus) | `(101 - rank) * 0.5` | 50 |
-| Apple Music (bonus) | `(101 - rank) * 0.6` | 60 |
-| YouTube Music (bonus) | `(101 - rank) * 0.4` | 40 |
+| Billboard Hot 100 | 1.0 | Primary signal — editorially-curated US cultural reference |
+| Billboard genre charts (Rap, Country, Latin, R&B, Dance/Electronic, Rock/Alternative) | 1.0 | Primary signal — captures genre-specific popularity |
+| Spotify Global | 0.5 | Supplementary — global streaming breadth |
+| Spotify UK | 0.5 | Supplementary — UK market signal |
+| Spotify US (bonus) | 0.4 | Supplementary, often overlaps Billboard |
+| Apple Music (bonus) | 0.4 | Supplementary |
+| YouTube Music (bonus) | 0.4 | Supplementary |
 
-Combined score = sum across all sources the song appeared in.
+Combined score for a song = sum of weighted scores across all sources it appeared in.
 
-Rationale:
-- Billboard Hot 100 is the strongest signal (US cultural footprint) — weighted 1.0
-- Billboard genre charts add genre depth — moderate weight, capped because the lists are short
-- Spotify Global is broad streaming — weighted 0.8 to slightly defer to Billboard's cultural-importance signal
-- Spotify UK provides regional/genre diversity — weighted 0.5 (smaller market, can be skewed by fandom)
-- Bonus sources (Spotify US, Apple, YouTube) — moderate weights, present only if data is available
+**Rationale:** Billboard is the established cultural-popularity reference (aggregates radio, sales, streaming with editorial methodology). Other charts represent single-platform listening behavior — useful for breadth and international coverage, but lower-weight signals. Normalizing within each chart before weighting ensures that the weighting reflects source authority, not chart length.
 
-The 0.8 / 0.5 weights are not magic numbers; they reflect a soft preference for Billboard's cultural-radio signal over pure streaming volume. Tunable later if results feel off.
+Example outcomes:
+- A song at #1 on Billboard Hot 100, absent elsewhere → score 1.0
+- A song at #1 on Spotify Global, absent elsewhere → score 0.5
+- A song at #1 on Billboard AND #1 on Spotify Global AND #20 on Apple → 1.0 + 0.5 + 0.4 × 0.81 ≈ 1.82
+- A song at #50 on Billboard genre chart only → 1.0 × 0.02 = 0.02 (small but nonzero — reflects narrow scope)
+
+Sort candidates per year by combined score descending, take top 420.
 
 ## Output schema
 
