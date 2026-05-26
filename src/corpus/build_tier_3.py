@@ -194,8 +194,12 @@ def _parse_numberone_row_cells(cells: list) -> list[tuple[str, str]]:
     """Extract (title, artist) pairs from table row cells.
 
     Handles two Wikipedia table formats used across genre number-one pages:
-    - Combined: "Song Title\\nArtist Name" in a single cell (Country format)
-    - Separate: quoted title cell followed by artist cell (R&B/Latin/Dance format)
+    - Combined (<br> present): title and artist in the same cell separated by a
+      <br> tag (Country format: '"Fancy Like"<br>Walker Hayes').
+    - Separate (no <br>): title in a quoted single cell, artist in the next cell.
+      Artist cells are joined with spaces so that inline <a> tags for featured
+      artists don't fragment into lines (e.g. "DJ Khaled featuring Drake and
+      Lil Baby" stays on one line instead of splitting at each hyperlink).
     """
     results: list[tuple[str, str]] = []
     pending_title: str | None = None
@@ -204,47 +208,43 @@ def _parse_numberone_row_cells(cells: list) -> list[tuple[str, str]]:
         if i == 0:
             continue  # first column is always the issue date
 
-        raw = _FOOTNOTE_RE.sub("", cell.get_text(separator="\n"))
-        lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
-
-        if not lines:
+        if cell.find("br"):
+            # Combined cell: <br> separates title (line 0) from artist (rest).
+            raw = _FOOTNOTE_RE.sub("", cell.get_text(separator="\n"))
+            lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+            if len(lines) >= 2:
+                title = _QUOTE_RE.sub("", lines[0]).strip()
+                artist = " ".join(lines[1:]).strip()
+                if title and artist and len(title) >= 2 and len(artist) >= 2:
+                    results.append((title, artist))
             pending_title = None
             continue
 
-        first_line = lines[0]
+        # No <br>: join all inline text with spaces so "DJ Khaled featuring
+        # Drake and Lil Baby" is one string rather than one line per <a> tag.
+        raw = _FOOTNOTE_RE.sub("", cell.get_text(separator=" "))
+        text = re.sub(r"\s+", " ", raw).strip()
+
+        if not text or text in ("–", "—", "-", "——"):
+            pending_title = None
+            continue
 
         # Skip reference cells: "[1]", "[2]", bare digits
-        if re.match(r"^\[?\d+\]?$", first_line.strip()):
+        if re.match(r"^\[?\d+\]?$", text):
             pending_title = None
             continue
 
-        # Skip chart-continuation placeholders
-        if first_line.strip() in ("–", "—", "-", "——"):
+        is_quoted = bool(
+            re.match(r'^["""]', text) or re.search(r'["""]$', text)
+        )
+        if is_quoted:
+            pending_title = _QUOTE_RE.sub("", text).strip()
+        elif pending_title is not None:
+            # Unquoted cell following a title → artist name
+            if len(text) >= 2:
+                results.append((pending_title, text))
             pending_title = None
-            continue
-
-        if len(lines) >= 2:
-            # Combined cell: title on first line, artist on second
-            title = _QUOTE_RE.sub("", first_line).strip()
-            artist = lines[1].strip()
-            if title and artist and len(title) >= 2 and len(artist) >= 2:
-                results.append((title, artist))
-            pending_title = None
-        else:
-            # Single-line cell: distinguish title vs. artist by leading/trailing quotes
-            is_quoted = bool(
-                re.match(r'^[“”"]', first_line)
-                or re.search(r'[“”"]$', first_line)
-            )
-            if is_quoted:
-                pending_title = _QUOTE_RE.sub("", first_line).strip()
-            elif pending_title is not None:
-                # Unquoted cell following a title → artist name
-                artist = re.sub(r"\s+", " ", first_line).strip()
-                if artist and len(artist) >= 2:
-                    results.append((pending_title, artist))
-                pending_title = None
-            # else: unquoted, no pending title (probably a date or stray text) → skip
+        # else: unquoted, no pending title (date, stray text) → skip
 
     return results
 

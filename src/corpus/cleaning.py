@@ -30,9 +30,10 @@ def _split_featured_list(s: str) -> str:
     """Normalize a raw featured-artist string to a comma-separated list.
 
     'Kid Cudi & Lloyd' → 'Kid Cudi, Lloyd'
+    'Drake and Lil Baby' → 'Drake, Lil Baby'
     'Lauren Bennett & GoonRock' → 'Lauren Bennett, GoonRock'
     """
-    parts = re.split(r"\s*[&,]\s*", s)
+    parts = re.split(r"\s*(?:[&,]|\band\b)\s*", s)
     parts = [p.strip() for p in parts if p.strip()]
     return ", ".join(parts)
 
