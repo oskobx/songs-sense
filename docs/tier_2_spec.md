@@ -81,9 +81,9 @@ Re-use the shared utilities in `src/corpus/cleaning.py`:
 
 ## Deduplication
 
-**Within Tier 2:** A song appearing in multiple year-end charts within the decade should result in ONE row per song per decade — with `source_rank` = the best rank achieved.
+**Within Tier 2:** A song appearing in multiple year-end charts within the decade should result in ONE row per song per decade — with `source_rank` = the cumulative decade score (sum of inverse ranks across all year-end appearances in the decade).
 
-**Across decades within Tier 2:** A song can appear in multiple decades (rare — e.g. a song released late in a decade that re-charts the next year) — drop the duplicate, keep the entry with the better source_rank.
+**Across decades within Tier 2:** A song can appear in multiple decades (rare — e.g. a song released late in a decade that re-charts the next year) — drop the duplicate, keep the entry with the higher source_rank (higher cumulative decade score).
 
 **Across Tiers (vs Tier 1):** After building Tier 2, dedup against Tier 1:
 - Load `data/tier_1_canonical.csv`
