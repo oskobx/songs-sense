@@ -29,16 +29,21 @@ For each decade, aggregate all year-end charts (10 years × 100 songs = 1,000 ca
 
 ### How to pick top-N per decade
 
-A song's "decade score" is computed from its best year-end rank across all years in the decade:
-- Rank 1 → score 100
-- Rank 2 → score 99
-- ...
-- Rank 100 → score 1
-- (i.e. `score = 101 - rank`)
+A song's "decade score" is computed by summing inverse ranks across all year-end charts in the decade where the song appeared:
 
-If a song appears in multiple year-end charts within the decade, take the highest score. Then sort by score and take the top N for that decade.
+- For each year-end appearance: `points = 101 - rank` (so rank 1 → 100 points, rank 100 → 1 point)
+- A song's decade score = sum of points across all year-end appearances in that decade
 
-This favors songs that charted highly *at some point*, not just songs that lingered in the lower ranks for years.
+Then sort by decade score descending and take the top N per decade.
+
+This rewards both peak performance AND sustained presence within the decade:
+- A song that hit #1 once gets 100 points
+- A song that hit #15, #18, #22, #19 across four years gets 86+83+79+82 = 330 points
+- The four-year sustained hit ranks higher than the one-off chart-topper
+
+This produces a corpus of songs that *defined the era* — either by being inescapable for one year or by sustained popularity over multiple — rather than just one-off chart peaks.
+
+If a song appears in year-end charts of TWO different decades (rare — release at decade boundary), assign it to the decade where it has higher total score. Don't double-count.
 
 ## Acquisition strategy
 
@@ -62,7 +67,7 @@ CSV at `data/tier_2_decades.csv` with columns:
 | `year` | int | The year this song appeared on Billboard Year-End Hot 100 (if it appeared in multiple, use the year of best rank) |
 | `decade` | string | Decade label: `"1960s"`, `"1970s"`, `"1980s"`, `"1990s"`, `"2000s"`, `"2010s"` |
 | `source` | string | Always `"billboard_year_end"` |
-| `source_rank` | int | Best (lowest = best) year-end rank achieved in this decade |
+| `source_rank` | int | Decade score (sum of inverse ranks across year-end appearances in the decade). Higher = more popular. |
 | `tier` | string | Always `"decades"` |
 
 ## Cleaning rules
