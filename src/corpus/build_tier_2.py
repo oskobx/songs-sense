@@ -242,10 +242,41 @@ def _drop_alternate_versions(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(index=to_drop)
 
 
+def _aggregate_decade(sub: pd.DataFrame) -> pd.DataFrame:
+    """Collapse per-appearance rows into one row per unique song.
+
+    For each song:
+    - decade_score = sum of (101 - rank) across all year-end appearances
+    - year         = the year where rank was best (lowest number)
+    - artist / featured_artists / title taken from the best-rank appearance
+
+    Requires _key, _artist_key columns to be pre-computed on sub.
+    """
+    rows: list[dict] = []
+    for key, group in sub.groupby("_key", sort=False):
+        best = group.loc[group["rank"].idxmin()]
+        rows.append(
+            {
+                "_key": key,
+                "_artist_key": best["_artist_key"],
+                "artist": best["artist"],
+                "featured_artists": best["featured_artists"],
+                "title": best["title"],
+                "year": int(best["year"]),
+                "decade": best["decade"],
+                "decade_score": int(group["score"].sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build_decade_top(
     df: pd.DataFrame, t1_keys: set[str]
 ) -> tuple[pd.DataFrame, int]:
-    """Select the top-N songs per decade, excluding Tier 1 songs from the pool.
+    """Select the top-N songs per decade by cumulative decade score.
+
+    Decade score = sum of (101 - rank) across every year-end chart appearance
+    within the decade. Rewards sustained presence as well as peak performance.
 
     Tier 1 songs are excluded before per-decade selection rather than after,
     so the target counts are met by the best non-Tier-1 songs rather than by
@@ -264,31 +295,29 @@ def build_decade_top(
         sub["_title_key"] = sub["title"].apply(normalize_for_dedup)
         sub["_key"] = sub["_artist_key"] + "|||" + sub["_title_key"]
 
-        # Within-decade dedup: keep best score (lowest rank) per song.
-        sub = sub.sort_values("score", ascending=False).drop_duplicates(
-            subset="_key", keep="first"
-        )
-        sub = _drop_alternate_versions(sub)
+        # Aggregate appearances → one row per song with cumulative decade score.
+        agg = _aggregate_decade(sub)
+        agg = _drop_alternate_versions(agg)
 
         # Exclude Tier 1 songs before selecting top-N.
-        in_t1 = sub["_key"].isin(t1_keys)
+        in_t1 = agg["_key"].isin(t1_keys)
         excluded_total += int(in_t1.sum())
-        candidates = sub[~in_t1]
+        candidates = agg[~in_t1]
 
-        result_frames.append(candidates.nlargest(target, "score"))
+        result_frames.append(candidates.nlargest(target, "decade_score"))
 
     combined = pd.concat(result_frames, ignore_index=True)
 
-    # Cross-decade dedup: a song appearing in two decades keeps its better entry.
+    # Cross-decade dedup: keep the entry with the higher cumulative decade score.
     combined["_artist_key"] = combined["artist"].apply(normalize_for_dedup)
     combined["_title_key"] = combined["title"].apply(normalize_for_dedup)
     combined["_key"] = combined["_artist_key"] + "|||" + combined["_title_key"]
-    combined = combined.sort_values("score", ascending=False).drop_duplicates(
+    combined = combined.sort_values("decade_score", ascending=False).drop_duplicates(
         subset="_key", keep="first"
     )
 
     combined["source"] = "billboard_year_end"
-    combined["source_rank"] = combined["rank"]
+    combined["source_rank"] = combined["decade_score"]
     combined["tier"] = "decades"
 
     result = combined[
