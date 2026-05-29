@@ -56,6 +56,7 @@ _KNOWN_BANDS: frozenset[str] = frozenset(
         "Emerson, Lake & Palmer",
         "Blood, Sweat & Tears",
         "Peter, Paul & Mary",
+        "Tyler, the Creator",
     ]
 )
 
