@@ -10,6 +10,9 @@ Routing:
     English queries   → bge-base-en-v1.5  (embedding column)
     Polish / German   → bge-m3 dense      (embedding_multi column)
     Ambiguous / None  → English fallback
+
+Boost:
+    Passages whose language matches the query language get +0.1 similarity.
 """
 
 from __future__ import annotations
@@ -26,6 +29,15 @@ from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
+LANG_BOOST = 0.1
+
+# ISO codes for the three routable languages
+_LANG_TO_ISO = {
+    Language.ENGLISH: "en",
+    Language.POLISH: "pl",
+    Language.GERMAN: "de",
+}
+
 # ---------------------------------------------------------------------------
 # Language detector (restricted to the three priority languages)
 # ---------------------------------------------------------------------------
@@ -37,17 +49,20 @@ _detector = (
 )
 
 
-def route_query(query: str) -> str:
-    """Return 'english' or 'multilingual' based on detected language."""
+def detect_query(query: str) -> tuple[str, str | None]:
+    """Return (route, iso_code): route is 'english' or 'multilingual',
+    iso_code is 'en'/'pl'/'de' or None if undetected."""
     detected = _detector.detect_language_of(query)
-    if detected == Language.ENGLISH or detected is None:
-        return "english"
-    return "multilingual"
+    if detected == Language.ENGLISH:
+        return "english", "en"
+    if detected is None:
+        return "english", None
+    return "multilingual", _LANG_TO_ISO.get(detected)
 
 
 def detected_label(query: str) -> str:
-    lang = _detector.detect_language_of(query)
-    return lang.name.capitalize() if lang is not None else "Unknown (→ English fallback)"
+    detected = _detector.detect_language_of(query)
+    return detected.name.capitalize() if detected is not None else "Unknown (→ English fallback)"
 
 
 # ---------------------------------------------------------------------------
@@ -77,26 +92,29 @@ def encode_query_multi(model: BGEM3FlagModel, query: str) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# Search
+# Search (with language boost)
 # ---------------------------------------------------------------------------
 
 def search(
     conn: psycopg.Connection,
     vec: list[float],
     column: str,
+    query_lang: str | None,
     top_k: int,
 ) -> list[tuple]:
     return conn.execute(
         f"""
         SELECT s.artist, s.title, s.year, s.tier,
-               1 - (p.{column} <=> %s::vector) AS sim,
-               p.passage_text
+               1 - (p.{column} <=> %s::vector)
+               + CASE WHEN p.language = %s THEN {LANG_BOOST} ELSE 0.0 END AS sim,
+               p.passage_text,
+               p.language
         FROM passages p
         JOIN songs s ON p.song_id = s.id
-        ORDER BY p.{column} <=> %s::vector
+        ORDER BY sim DESC
         LIMIT %s
         """,
-        (vec, vec, top_k),
+        (vec, query_lang, top_k),
     ).fetchall()
 
 
@@ -128,7 +146,7 @@ def main() -> None:
     )
 
     for q in queries:
-        route = route_query(q)
+        route, query_lang = detect_query(q)
         lang_label = detected_label(q)
 
         if route == "english":
@@ -140,15 +158,16 @@ def main() -> None:
             column = "embedding_multi"
             model_label = "bge-m3"
 
-        rows = search(conn, vec, column, args.top)
+        rows = search(conn, vec, column, query_lang, args.top)
 
+        boost_note = f"+{LANG_BOOST} boost for '{query_lang}' passages" if query_lang else "no boost (unknown lang)"
         print(f"Query    : {q!r}")
-        print(f"Detected : {lang_label}")
+        print(f"Detected : {lang_label}  ({boost_note})")
         print(f"Model    : {model_label}  (column: {column})")
         print()
-        for artist, title, year, tier, sim, text in rows:
+        for artist, title, year, tier, sim, text, plang in rows:
             snippet = text[:200].replace("\n", " / ")
-            print(f"  [{sim:.3f}] {artist} — {title} ({year}, {tier})")
+            print(f"  [{sim:.3f}] [{plang or '??':>2s}] {artist} — {title} ({year}, {tier})")
             print(f"           {snippet}")
         print()
 
