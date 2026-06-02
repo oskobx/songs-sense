@@ -124,7 +124,7 @@ def search(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Language-aware lyric search")
-    parser.add_argument("query", nargs="?", default="feeling lost at night")
+    parser.add_argument("query", nargs="?", default=None)
     parser.add_argument("--top", type=int, default=10, metavar="K")
     parser.add_argument(
         "--sanity",
@@ -142,10 +142,10 @@ def main() -> None:
     queries = (
         ["feeling lost at night", "samotność w mieście", "die Nacht ist dunkel"]
         if args.sanity
-        else [args.query]
+        else ([args.query] if args.query else [])
     )
 
-    for q in queries:
+    def run_query(q: str) -> None:
         route, query_lang = detect_query(q)
         lang_label = detected_label(q)
 
@@ -170,6 +170,21 @@ def main() -> None:
             print(f"  [{sim:.3f}] [{plang or '??':>2s}] {artist} — {title} ({year}, {tier})")
             print(f"           {snippet}")
         print()
+
+    if queries:
+        for q in queries:
+            run_query(q)
+    else:
+        print("songs-sense search  (empty line or Ctrl+D to quit)\n")
+        while True:
+            try:
+                q = input(">>> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not q:
+                break
+            run_query(q)
 
     conn.close()
 
