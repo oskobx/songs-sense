@@ -31,6 +31,7 @@ load_dotenv()
 LRCLIB_SEARCH = "https://lrclib.net/api/search"
 CONCURRENCY = 5
 POLITE_SLEEP = 0.15  # seconds between requests
+BATCH_SIZE = 100  # songs per gather+commit cycle
 FAILURES_CSV = ROOT / "data" / "lyrics_failures.csv"
 
 # Strips LRC timestamp tags: [mm:ss.xx] or [mm:ss:xx]
@@ -94,8 +95,26 @@ async def fetch_one(
             return song_id, None, f"error:{type(exc).__name__}"
 
 
+def append_failures(failures: list[dict[str, str]]) -> None:
+    """Append failure rows to the CSV, writing a header if the file is new."""
+    if not failures:
+        return
+    FAILURES_CSV.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = FAILURES_CSV.exists()
+    with FAILURES_CSV.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["artist", "title", "tier", "year", "reason"])
+        if not file_exists:
+            writer.writeheader()
+        writer.writerows(failures)
+
+
 async def run_lrclib_pass(limit: int | None = None) -> dict[str, int]:
-    """Fetch lyrics for NULL-lyrics songs from LRClib. Returns per-outcome counts."""
+    """Fetch lyrics for NULL-lyrics songs from LRClib, in batches.
+
+    Each batch of BATCH_SIZE songs is fetched, written to the DB, committed, and
+    logged before the next batch starts — so progress is visible and a crash
+    only loses the batch in flight.
+    """
     database_url = os.environ["DATABASE_URL"]
 
     with psycopg.connect(database_url) as conn:
@@ -110,68 +129,88 @@ async def run_lrclib_pass(limit: int | None = None) -> dict[str, int]:
         print("Nothing to do.")
         return {"success": 0, "no_results": 0, "error": 0}
 
+    n_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+    print(f"Processing in {n_batches} batches of up to {BATCH_SIZE} (concurrency {CONCURRENCY})\n")
+
     sem = asyncio.Semaphore(CONCURRENCY)
     start = time.monotonic()
 
-    async with httpx.AsyncClient(
-        headers={"User-Agent": "songs-sense/0.1 (portfolio project, contact: oskobx@gmail.com)"}
-    ) as client:
-        tasks = [
-            fetch_one(client, sem, row[0], row[1], row[2])
-            for row in rows
-        ]
-        results = await asyncio.gather(*tasks)
-
-    elapsed = time.monotonic() - start
-
-    # Pair results with original row metadata
-    row_by_id = {row[0]: row for row in rows}
     counts: dict[str, int] = {"success": 0, "no_results": 0, "error": 0}
-    failures: list[dict[str, str]] = []
+    failures_logged = 0
     sample_lyrics: list[tuple[str, str, str]] = []
 
     with psycopg.connect(database_url) as conn:
-        for song_id, lyrics, reason in results:
-            _, artist, title, tier, year = row_by_id[song_id]
+        async with httpx.AsyncClient(
+            headers={
+                "User-Agent": "songs-sense/0.1 (portfolio project, contact: oskobx@gmail.com)"
+            }
+        ) as client:
+            for batch_start in range(0, total, BATCH_SIZE):
+                batch = rows[batch_start : batch_start + BATCH_SIZE]
+                row_by_id = {row[0]: row for row in batch}
 
-            if lyrics:
-                conn.execute(
-                    "UPDATE songs SET lyrics = %s, lyrics_source = 'lrclib' WHERE id = %s",
-                    (lyrics, song_id),
+                results = await asyncio.gather(
+                    *(fetch_one(client, sem, row[0], row[1], row[2]) for row in batch)
                 )
-                counts["success"] += 1
-                if len(sample_lyrics) < 5:
-                    sample_lyrics.append((artist, title, lyrics[:200]))
-            else:
-                bucket = "no_results" if reason == "no_results" else "error"
-                counts[bucket] += 1
-                failures.append(
-                    {
-                        "artist": artist,
-                        "title": title,
-                        "tier": tier or "",
-                        "year": str(year or ""),
-                        "reason": reason or "unknown",
-                    }
-                )
-        conn.commit()
 
-    # Append failures to CSV
-    if failures:
-        file_exists = FAILURES_CSV.exists()
-        with FAILURES_CSV.open("a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["artist", "title", "tier", "year", "reason"])
-            if not file_exists:
-                writer.writeheader()
-            writer.writerows(failures)
+                batch_counts = {"success": 0, "no_results": 0, "error": 0}
+                failures: list[dict[str, str]] = []
+
+                for song_id, lyrics, reason in results:
+                    _, artist, title, tier, year = row_by_id[song_id]
+
+                    if lyrics:
+                        conn.execute(
+                            "UPDATE songs SET lyrics = %s, lyrics_source = 'lrclib' WHERE id = %s",
+                            (lyrics, song_id),
+                        )
+                        batch_counts["success"] += 1
+                        if len(sample_lyrics) < 5:
+                            sample_lyrics.append((artist, title, lyrics[:200]))
+                    else:
+                        bucket = "no_results" if reason == "no_results" else "error"
+                        batch_counts[bucket] += 1
+                        failures.append(
+                            {
+                                "artist": artist,
+                                "title": title,
+                                "tier": tier or "",
+                                "year": str(year or ""),
+                                "reason": reason or "unknown",
+                            }
+                        )
+
+                conn.commit()
+                append_failures(failures)
+                failures_logged += len(failures)
+
+                for key, value in batch_counts.items():
+                    counts[key] += value
+
+                done = batch_start + len(batch)
+                elapsed = time.monotonic() - start
+                eta_min = (elapsed / done) * (total - done) / 60
+                print(
+                    f"[{done}/{total}] "
+                    f"batch: hits={batch_counts['success']} "
+                    f"misses={batch_counts['no_results']} "
+                    f"errors={batch_counts['error']} | "
+                    f"overall: hits={counts['success']} "
+                    f"misses={counts['no_results']} "
+                    f"errors={counts['error']} | "
+                    f"ETA {eta_min:.0f}m",
+                    flush=True,
+                )
+
+    elapsed = time.monotonic() - start
 
     print(f"\n--- LRClib pass results ({elapsed:.1f}s) ---")
     print(f"  Songs processed : {total}")
     print(f"  Success         : {counts['success']}  ({counts['success']/total*100:.1f}%)")
     print(f"  No results      : {counts['no_results']}  ({counts['no_results']/total*100:.1f}%)")
     print(f"  Errors          : {counts['error']}  ({counts['error']/total*100:.1f}%)")
-    if failures:
-        print(f"  Failures logged : {len(failures)} → {FAILURES_CSV}")
+    if failures_logged:
+        print(f"  Failures logged : {failures_logged} → {FAILURES_CSV}")
 
     if sample_lyrics:
         print("\n--- 5 sample lyrics fetched ---")
@@ -209,20 +248,20 @@ def print_db_stats(database_url: str) -> None:
             """
         ).fetchall()
 
-        rate_limit_rows = conn.execute(
-            "SELECT COUNT(*) FROM songs WHERE lyrics IS NULL"
-        ).fetchone()[0]
-
     print("\n=== LRClib full-pass DB stats ===")
     print(f"  Total songs in DB       : {total:,}")
-    print(f"  Saved to DB (lrclib)    : {with_lyrics:,}  ({with_lyrics/total*100:.1f}%)")
-    print(f"  Still NULL (all sources): {null_lyrics:,}  ({null_lyrics/total*100:.1f}%)")
+    print(
+        f"  Saved to DB (lrclib)    : {with_lyrics:,}  ({with_lyrics / total * 100:.1f}%)"
+    )
+    print(
+        f"  Still NULL (all sources): {null_lyrics:,}  ({null_lyrics / total * 100:.1f}%)"
+    )
     if avg_len:
         print(f"  Avg lyrics length       : {avg_len:.0f} chars")
 
     print("\n  Per-tier coverage (lrclib only):")
     print(f"  {'Tier':<20}  {'Fetched':>7}  {'Total':>7}  {'Cover%':>7}")
-    print(f"  {'-'*20}  {'-'*7}  {'-'*7}  {'-'*7}")
+    print(f"  {'-' * 20}  {'-' * 7}  {'-' * 7}  {'-' * 7}")
     for tier, total_t, fetched_t in tier_rows:
         pct = fetched_t / total_t * 100 if total_t else 0
         print(f"  {tier:<20}  {fetched_t:>7,}  {total_t:>7,}  {pct:>6.1f}%")
@@ -231,8 +270,10 @@ def print_db_stats(database_url: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch lyrics from LRClib")
     parser.add_argument(
-        "--limit", type=int, default=None,
-        help="Process only first N NULL-lyrics songs (for testing)"
+        "--limit",
+        type=int,
+        default=None,
+        help="Process only first N NULL-lyrics songs (for testing)",
     )
     args = parser.parse_args()
     asyncio.run(run_lrclib_pass(limit=args.limit))
