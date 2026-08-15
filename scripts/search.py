@@ -1,181 +1,195 @@
-"""Language-aware semantic search against the lyrics corpus.
+"""Language-aware lyric search with per-mode retrieval profiles.
 
 Usage:
     python scripts/search.py "feeling lost at night"
-    python scripts/search.py "samotność w mieście"
-    python scripts/search.py "die Nacht ist dunkel"
-    python scripts/search.py --top 5 "your query here"
+    python scripts/search.py --mode find "shorty had them apple bottom jeans"
+    python scripts/search.py --mode twin "I miss the days when we were young"
+    python scripts/search.py --top 5 --mode find "your query here"
+
+Modes:
+    vibe  (default) — semantic only; pure embedding match + language boost
+    find            — hybrid (semantic + BM25 via RRF); best for lyric snippets
+    twin            — semantic only; same as vibe, MMR diversity coming in Phase 5
 
 Routing:
     English queries   → bge-base-en-v1.5  (embedding column)
     Polish / German   → bge-m3 dense      (embedding_multi column)
     Ambiguous / None  → English fallback
-
-Boost:
-    Passages whose language matches the query language get +0.1 similarity.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 import psycopg
 from dotenv import load_dotenv
-from FlagEmbedding import BGEM3FlagModel
-from lingua import Language, LanguageDetectorBuilder
 from pgvector.psycopg import register_vector
-from sentence_transformers import SentenceTransformer
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from src.retrieval.bm25 import bm25_search
+from src.retrieval.hybrid import rrf_combine
+from src.retrieval.semantic import (
+    LANG_BOOST,
+    detect_query,
+    detected_label,
+    semantic_search,
+)
 
 load_dotenv()
 
-LANG_BOOST = 0.1
 
-# ISO codes for the three routable languages
-_LANG_TO_ISO = {
-    Language.ENGLISH: "en",
-    Language.POLISH: "pl",
-    Language.GERMAN: "de",
-}
-
-# ---------------------------------------------------------------------------
-# Language detector (restricted to the three priority languages)
-# ---------------------------------------------------------------------------
-
-_detector = (
-    LanguageDetectorBuilder
-    .from_languages(Language.ENGLISH, Language.POLISH, Language.GERMAN)
-    .build()
-)
-
-
-def detect_query(query: str) -> tuple[str, str | None]:
-    """Return (route, iso_code): route is 'english' or 'multilingual',
-    iso_code is 'en'/'pl'/'de' or None if undetected."""
-    detected = _detector.detect_language_of(query)
-    if detected == Language.ENGLISH:
-        return "english", "en"
-    if detected is None:
-        return "english", None
-    return "multilingual", _LANG_TO_ISO.get(detected)
-
-
-def detected_label(query: str) -> str:
-    detected = _detector.detect_language_of(query)
-    return detected.name.capitalize() if detected is not None else "Unknown (→ English fallback)"
-
-
-# ---------------------------------------------------------------------------
-# Model loading (both stay in memory for fast switching)
-# ---------------------------------------------------------------------------
-
-def load_models() -> tuple[SentenceTransformer, BGEM3FlagModel]:
-    print("Loading bge-base-en-v1.5...", flush=True)
-    bge_base = SentenceTransformer("BAAI/bge-base-en-v1.5")
-    print("Loading bge-m3...", flush=True)
-    bge_m3 = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False)
-    print("Models ready.\n", flush=True)
-    return bge_base, bge_m3
-
-
-# ---------------------------------------------------------------------------
-# Query encoding
-# ---------------------------------------------------------------------------
-
-def encode_query_english(model: SentenceTransformer, query: str) -> list[float]:
-    return model.encode(query, normalize_embeddings=True).tolist()
-
-
-def encode_query_multi(model: BGEM3FlagModel, query: str) -> list[float]:
-    vec = model.encode([query], batch_size=1, max_length=512)["dense_vecs"][0]
-    return vec.tolist()
-
-
-# ---------------------------------------------------------------------------
-# Search (with language boost)
-# ---------------------------------------------------------------------------
-
-def search(
-    conn: psycopg.Connection,
-    vec: list[float],
-    column: str,
-    query_lang: str | None,
-    top_k: int,
-) -> list[tuple]:
-    return conn.execute(
-        f"""
-        SELECT s.artist, s.title, s.year, s.tier,
-               1 - (p.{column} <=> %s::vector)
-               + CASE WHEN p.language = %s THEN {LANG_BOOST} ELSE 0.0 END AS sim,
-               p.passage_text,
-               p.language
+def _fetch_passages(
+    conn: psycopg.Connection, passage_ids: list[int]
+) -> list[dict]:
+    if not passage_ids:
+        return []
+    rows = conn.execute(
+        """
+        SELECT s.artist, s.title, s.year, s.tier, p.language, p.passage_text, p.id
         FROM passages p
         JOIN songs s ON p.song_id = s.id
-        ORDER BY sim DESC
-        LIMIT %s
+        WHERE p.id = ANY(%s)
         """,
-        (vec, query_lang, top_k),
+        (passage_ids,),
     ).fetchall()
+    return [
+        {
+            "artist": r[0],
+            "title": r[1],
+            "year": r[2],
+            "tier": r[3],
+            "language": r[4],
+            "passage_text": r[5],
+            "id": r[6],
+        }
+        for r in rows
+    ]
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+def _snippet(text: str) -> str:
+    return text[:200].replace("\n", " / ")
+
+
+def _dominant(passage_id: int, sem_ids: set[int], bm25_ids: set[int]) -> str:
+    in_sem = passage_id in sem_ids
+    in_bm25 = passage_id in bm25_ids
+    if in_sem and in_bm25:
+        return "both"
+    if in_sem:
+        return "semantic"
+    return "BM25"
+
+
+def run_query(
+    query: str,
+    mode: str,
+    top_k: int,
+    conn: psycopg.Connection,
+) -> None:
+    route, query_lang = detect_query(query)
+    lang_label = detected_label(query)
+    boost_note = (
+        f"+{LANG_BOOST} boost for '{query_lang}' passages"
+        if query_lang
+        else "no boost (unknown lang)"
+    )
+    model_label = (
+        "bge-m3 (embedding_multi)" if query_lang in ("pl", "de")
+        else "bge-base-en-v1.5 (embedding)"
+    )
+
+    print(f"Query    : {query!r}")
+    print(f"Mode     : {mode}")
+    print(f"Detected : {lang_label}  ({boost_note})")
+
+    if mode in ("vibe", "twin"):
+        print(f"Profile  : semantic only  [{model_label}]")
+        print()
+
+        sem_results = semantic_search(conn, query, query_lang, top_k=top_k)
+        sem_scores = dict(sem_results)
+        rows = _fetch_passages(conn, [pid for pid, _ in sem_results])
+        rows.sort(key=lambda r: sem_scores.get(r["id"], 0.0), reverse=True)
+
+        for i, row in enumerate(rows, 1):
+            sim = sem_scores.get(row["id"], 0.0)
+            print(
+                f"  {i:2}. [sem={sim:.4f}] [dominant=semantic]"
+                f"  {row['artist']} — {row['title']}"
+                f" ({row['year']}, {row['tier']}) [{row['language'] or '??':>2s}]"
+            )
+            print(f"       {_snippet(row['passage_text'])}")
+        print()
+
+    elif mode == "find":
+        print(f"Profile  : hybrid (semantic + BM25 via RRF, k=60)  [{model_label}]")
+        print()
+
+        sem_results = semantic_search(conn, query, query_lang, top_k=100)
+        bm25_results = bm25_search(conn, query, top_k=100)
+        rrf_results = rrf_combine([sem_results, bm25_results], k=60, top_n=top_k)
+
+        sem_scores = dict(sem_results)
+        bm25_scores = dict(bm25_results)
+        rrf_scores = dict(rrf_results)
+        sem_ids = set(sem_scores)
+        bm25_ids = set(bm25_scores)
+
+        rows = _fetch_passages(conn, [pid for pid, _ in rrf_results])
+        rows.sort(key=lambda r: rrf_scores.get(r["id"], 0.0), reverse=True)
+
+        for i, row in enumerate(rows, 1):
+            pid = row["id"]
+            rrf = rrf_scores.get(pid, 0.0)
+            sem = sem_scores.get(pid)
+            bm25 = bm25_scores.get(pid)
+            dom = _dominant(pid, sem_ids, bm25_ids)
+
+            sem_str = f"{sem:.4f}" if sem is not None else "  —   "
+            bm25_str = f"{bm25:.5f}" if bm25 is not None else "   —    "
+
+            print(
+                f"  {i:2}. [rrf={rrf:.5f}] [sem={sem_str}] [bm25={bm25_str}]"
+                f" [dominant={dom}]"
+            )
+            print(
+                f"       {row['artist']} — {row['title']}"
+                f" ({row['year']}, {row['tier']}) [{row['language'] or '??':>2s}]"
+            )
+            print(f"       {_snippet(row['passage_text'])}")
+        print()
+
+    else:
+        print(f"Unknown mode: {mode!r}", file=sys.stderr)
+        sys.exit(1)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Language-aware lyric search")
     parser.add_argument("query", nargs="?", default=None)
     parser.add_argument("--top", type=int, default=10, metavar="K")
     parser.add_argument(
-        "--sanity",
-        action="store_true",
-        help="Run all three sanity queries (English / Polish / German)",
+        "--mode",
+        choices=["vibe", "find", "twin"],
+        default="vibe",
+        help="Retrieval profile: vibe=semantic, find=hybrid, twin=semantic (default: vibe)",
     )
     args = parser.parse_args()
-
-    bge_base, bge_m3 = load_models()
 
     url = os.environ["DATABASE_URL"]
     conn = psycopg.connect(url)
     register_vector(conn)
 
-    queries = (
-        ["feeling lost at night", "samotność w mieście", "die Nacht ist dunkel"]
-        if args.sanity
-        else ([args.query] if args.query else [])
-    )
-
-    def run_query(q: str) -> None:
-        route, query_lang = detect_query(q)
-        lang_label = detected_label(q)
-
-        if route == "english":
-            vec = encode_query_english(bge_base, q)
-            column = "embedding"
-            model_label = "bge-base-en-v1.5"
-        else:
-            vec = encode_query_multi(bge_m3, q)
-            column = "embedding_multi"
-            model_label = "bge-m3"
-
-        rows = search(conn, vec, column, query_lang, args.top)
-
-        boost_note = f"+{LANG_BOOST} boost for '{query_lang}' passages" if query_lang else "no boost (unknown lang)"
-        print(f"Query    : {q!r}")
-        print(f"Detected : {lang_label}  ({boost_note})")
-        print(f"Model    : {model_label}  (column: {column})")
-        print()
-        for artist, title, year, tier, sim, text, plang in rows:
-            snippet = text[:200].replace("\n", " / ")
-            print(f"  [{sim:.3f}] [{plang or '??':>2s}] {artist} — {title} ({year}, {tier})")
-            print(f"           {snippet}")
-        print()
+    queries = [args.query] if args.query else []
 
     if queries:
         for q in queries:
-            run_query(q)
+            run_query(q, args.mode, args.top, conn)
     else:
-        print("songs-sense search  (empty line or Ctrl+D to quit)\n")
+        print(f"songs-sense search  [mode={args.mode}]  (empty line or Ctrl+D to quit)\n")
         while True:
             try:
                 q = input(">>> ").strip()
@@ -184,7 +198,7 @@ def main() -> None:
                 break
             if not q:
                 break
-            run_query(q)
+            run_query(q, args.mode, args.top, conn)
 
     conn.close()
 
