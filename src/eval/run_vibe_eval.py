@@ -19,9 +19,10 @@ import argparse
 import json
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 from src.eval import metrics
-from src.eval.groq_client import DEFAULT_MODEL
+from src.eval.groq_client import DEFAULT_MODEL, set_min_interval
 from src.eval.judge import JudgeCache, JudgePair, judge_all, prompt_signature
 from src.eval.paths import EVAL_DIR, QUERIES_PATH, ensure_eval_dir, results_path
 from src.eval.retrieval_runner import config_description, db_connection, retrieve_vibe
@@ -31,27 +32,72 @@ LANGUAGE_ORDER = ["en", "pl", "de", "es"]
 TOP_K = 10
 
 
-def load_queries(limit: int | None) -> list[dict]:
-    if not QUERIES_PATH.exists():
+def load_queries(limit: int | None, queries_path: Path | None = None) -> list[dict]:
+    path = queries_path or QUERIES_PATH
+    if not path.exists():
         print(
-            f"{QUERIES_PATH} not found. Run:\n"
+            f"{path} not found. Run:\n"
             "  python -m src.eval.generate_vibe_queries\n"
             "  python -m src.eval.curate_queries",
             file=sys.stderr,
         )
         sys.exit(1)
-    queries = json.loads(QUERIES_PATH.read_text(encoding="utf-8"))["queries"]
+    queries = json.loads(path.read_text(encoding="utf-8"))["queries"]
     return queries[:limit] if limit else queries
 
 
 def load_judge_credibility() -> dict | None:
-    """The kappa line for the header. Absent is fine, but worth saying so loudly."""
+    """The kappa line for the header. Absent is fine, but worth saying so loudly.
+
+    Reads the batch-aware report shape written by src.eval.calibrate, and prefers
+    the highest-numbered batch when several exist: that is the held-out one, and
+    quoting a pooled or tuned-on figure would overstate the judge.
+    """
     if not CALIBRATION_REPORT_PATH.exists():
         return None
     try:
-        return json.loads(CALIBRATION_REPORT_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(CALIBRATION_REPORT_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+    # Older flat reports carried the kappa at the top level.
+    if "quadratic_weighted_kappa" in payload:
+        return {
+            "kappa": payload["quadratic_weighted_kappa"],
+            "n": payload.get("n"),
+            "languages": payload.get("languages") or [],
+            "subset": "all",
+            "version": payload.get("prompt_signature", "?"),
+        }
+
+    version = payload.get("active_version")
+    results = payload.get("results") or {}
+    entry = results.get(version) or (
+        results.get(payload.get("versions", [None])[-1])
+        if payload.get("versions")
+        else None
+    )
+    if not entry or not entry.get("subsets"):
+        return None
+
+    subsets = entry["subsets"]
+    batches = [k for k in subsets if k.startswith("batch ")]
+    if len(batches) > 1:
+        label = max(batches, key=lambda k: int(k.split()[1]))  # held-out batch
+    elif batches:
+        label = batches[0]
+    else:
+        label = next(iter(subsets))
+
+    stats = subsets[label]
+    return {
+        "kappa": stats["quadratic_weighted_kappa"],
+        "n": stats["n"],
+        "languages": payload.get("languages") or [],
+        "subset": label,
+        "version": version,
+        "held_out": len(batches) > 1,
+    }
 
 
 def retrieve_all(queries: list[dict], top_k: int) -> list[dict]:
@@ -78,7 +124,7 @@ def retrieve_all(queries: list[dict], top_k: int) -> list[dict]:
 
 
 def judge_all_results(
-    per_query: list[dict], model: str
+    per_query: list[dict], model: str, cache_path: Path | None = None
 ) -> tuple[dict[str, int], JudgeCache]:
     pairs = [
         JudgePair(
@@ -93,10 +139,14 @@ def judge_all_results(
         for entry in per_query
         for result in entry["results"]
     ]
-    cache = JudgeCache(signature=prompt_signature(model))
+    cache = (
+        JudgeCache(signature=prompt_signature(model), path=cache_path)
+        if cache_path is not None
+        else JudgeCache(signature=prompt_signature(model))
+    )
     print(f"\nJudging {len(pairs)} (query, passage) pairs...")
     # judge_all keys by cache_key; dict(judge_pairs(...)) would key by JudgePair object.
-    graded = judge_all(pairs, cache, model, progress=False)
+    graded = judge_all(pairs, cache, model, progress=True)
     print(f"  {cache.hits} cached, {cache.misses} new API calls")
     return graded, cache
 
@@ -147,11 +197,13 @@ def print_summary(
     print(f"=== Vibe Search Eval — {timestamp} ===")
     print(f"Config: {config}")
     if credibility:
-        kappa = credibility["quadratic_weighted_kappa"]
+        kappa = credibility["kappa"]
         covered = credibility.get("languages") or []
         scope = f", {'/'.join(covered)} only" if covered else ""
+        held = " held-out" if credibility.get("held_out") else ""
         print(
-            f"Judge: {model} (weighted kappa = {kappa:.2f}, "
+            f"Judge: {model} prompt {credibility.get('version', '?')} "
+            f"(weighted kappa = {kappa:.2f} on{held} {credibility['subset']}, "
             f"n={credibility['n']}{scope})"
         )
         evaluated = {d["language"] for d in detail}
@@ -218,15 +270,41 @@ def main() -> None:
     parser.add_argument(
         "--note", default=None, help="Appended to the recorded config line"
     )
+    parser.add_argument(
+        "--min-interval",
+        type=float,
+        default=7.0,
+        metavar="SECONDS",
+        help=(
+            "Minimum gap between judge API calls (default: 7). Groq allows 8,000 "
+            "tokens/min for this model, which binds long before the request limit; "
+            "7s keeps a run under it instead of collecting 429s. Cached pairs are "
+            "free and are not throttled."
+        ),
+    )
+    parser.add_argument(
+        "--cache-path",
+        type=Path,
+        default=None,
+        help="Judge cache location (default: data/eval/judge_cache.json)",
+    )
+    parser.add_argument(
+        "--queries-path",
+        type=Path,
+        default=None,
+        help="Eval query set (default: data/eval/vibe_queries.json)",
+    )
     args = parser.parse_args()
 
-    queries = load_queries(args.limit)
+    set_min_interval(args.min_interval)
+    queries = load_queries(args.limit, args.queries_path)
     config = config_description(args.note)
     print(f"Config: {config}")
-    print(f"Queries: {len(queries)}\n")
+    print(f"Queries: {len(queries)}")
+    print(f"Judge pacing: >= {args.min_interval:.1f}s between uncached calls\n")
 
     per_query = retrieve_all(queries, args.top_k)
-    graded, cache = judge_all_results(per_query, args.model)
+    graded, cache = judge_all_results(per_query, args.model, args.cache_path)
     detail = build_per_query_detail(per_query, graded)
 
     overall = metrics.summarize([d["grades"] for d in detail])

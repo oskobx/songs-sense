@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import random
+import sys
 import time
 
 import httpx
@@ -26,7 +27,57 @@ DEFAULT_MODEL = "openai/gpt-oss-120b"
 # so a burst of retries doesn't push us over.
 DEFAULT_RPM = 28
 
+# Hard ceiling on our own computed backoff, jitter included. A server-supplied
+# Retry-After is honoured verbatim and is deliberately NOT capped: Groq knows
+# when the quota window reopens, and retrying earlier just burns an attempt on
+# another 429.
+MAX_BACKOFF_SECONDS = 30.0
+
 _last_call_at: float = 0.0
+
+# Optional floor on the gap between requests, set by callers that need to stay
+# under a tokens-per-minute ceiling rather than a requests-per-minute one.
+_min_interval: float = 0.0
+
+# Rate-limit headers are printed once per process, on the first response.
+_rate_limits_reported: bool = False
+
+
+def set_min_interval(seconds: float) -> None:
+    """Force at least `seconds` between requests, on top of the RPM spacing.
+
+    Groq caps this model at 8,000 tokens/minute, which binds well before the
+    requests/minute limit does: a judge call is roughly 400-700 tokens, so ~12
+    requests/minute is the real ceiling. Only actual HTTP calls are throttled,
+    so a cache hit costs nothing.
+    """
+    global _min_interval
+    _min_interval = max(0.0, seconds)
+
+
+def _report_rate_limits(response: httpx.Response) -> None:
+    """Print Groq's quota headers once, so a long run's budget is visible up front."""
+    global _rate_limits_reported
+    if _rate_limits_reported:
+        return
+    _rate_limits_reported = True
+    fields = [
+        ("requests remaining", "x-ratelimit-remaining-requests"),
+        ("requests limit", "x-ratelimit-limit-requests"),
+        ("requests reset", "x-ratelimit-reset-requests"),
+        ("tokens remaining", "x-ratelimit-remaining-tokens"),
+        ("tokens limit", "x-ratelimit-limit-tokens"),
+        ("tokens reset", "x-ratelimit-reset-tokens"),
+    ]
+    present = [(label, response.headers.get(h)) for label, h in fields]
+    if not any(v for _, v in present):
+        print("groq: no rate-limit headers on this response", file=sys.stderr)
+        return
+    print("groq rate limits (first response of this run):", file=sys.stderr)
+    for label, value in present:
+        if value is not None:
+            print(f"  {label:<20} {value}", file=sys.stderr)
+    sys.stderr.flush()
 
 
 class GroqError(RuntimeError):
@@ -52,9 +103,16 @@ def _api_key() -> str:
 def _throttle(rpm: int) -> None:
     """Sleep just enough to keep the global call rate under `rpm`."""
     global _last_call_at
-    if rpm <= 0:
+    if rpm <= 0 and _min_interval <= 0:
         return
-    min_interval = 60.0 / rpm
+    if rpm <= 0:
+        min_interval = _min_interval
+        elapsed = time.monotonic() - _last_call_at
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        _last_call_at = time.monotonic()
+        return
+    min_interval = max(60.0 / rpm, _min_interval)
     elapsed = time.monotonic() - _last_call_at
     if elapsed < min_interval:
         time.sleep(min_interval - elapsed)
@@ -111,15 +169,40 @@ def chat(
             continue
 
         if response.status_code == 200:
+            _report_rate_limits(response)
             data = response.json()
             try:
-                return data["choices"][0]["message"]["content"] or ""
+                choice = data["choices"][0]
+                content = choice["message"]["content"] or ""
             except (KeyError, IndexError) as exc:
                 raise GroqError(f"unexpected response shape: {data}") from exc
+            # gpt-oss spends reasoning tokens from the same budget, so a tight
+            # max_completion_tokens can truncate before the answer is emitted.
+            # Silent truncation would show up as a mystery grade of 0.
+            if choice.get("finish_reason") == "length":
+                print(
+                    f"groq: response hit max_completion_tokens "
+                    f"({max_completion_tokens}); content may be truncated: "
+                    f"{content[:60]!r}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return content
 
         if response.status_code == 429:
-            wait = _retry_after(response) or _backoff(attempt)
-            last_error = f"429 rate limited (waiting {wait:.1f}s)"
+            _report_rate_limits(
+                response
+            )  # a 429 is the most informative first response
+            retry_after = _retry_after(response)
+            wait = retry_after if retry_after is not None else _backoff(attempt)
+            source = "server Retry-After" if retry_after is not None else "backoff"
+            last_error = f"429 rate limited (waited {wait:.1f}s)"
+            print(
+                f"groq: rate limited, sleeping {wait:.1f}s [{source}] "
+                f"(attempt {attempt + 1}/{max_retries})",
+                file=sys.stderr,
+                flush=True,
+            )
             time.sleep(wait)
             continue
 
@@ -147,4 +230,5 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 
 def _backoff(attempt: int) -> float:
-    return min(2.0 * (2**attempt), 30.0) + random.uniform(0, 0.5)
+    """Exponential backoff with jitter, hard-capped at MAX_BACKOFF_SECONDS."""
+    return min(2.0 * (2**attempt) + random.uniform(0, 0.5), MAX_BACKOFF_SECONDS)

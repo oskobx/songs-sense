@@ -146,6 +146,11 @@ PROMPT_VERSION = "v3"
 # Kept for callers that want the active template directly.
 PROMPT_TEMPLATE = PROMPT_TEMPLATES[PROMPT_VERSION]
 
+# A judgment is one digit. gpt-oss also emits reasoning tokens against this same
+# budget, so this is not as tight as it looks — see the truncation warning in
+# groq_client, which fires if a response ever hits the ceiling.
+JUDGE_MAX_TOKENS = 150
+
 # Deliberately empty. Drawing few-shot examples from the calibration set and
 # then measuring kappa on that same set is training on the test set: the score
 # would rise partly because the judge had been shown the answers. Adding
@@ -292,17 +297,22 @@ def judge_pair(
 ) -> int:
     """Grade one pair with a live LLM call (no cache). Retries once on garbage.
 
-    Defaults to 0 after a failed retry and logs it, per spec — a judge that
-    crashes the run over one malformed response is worse than one that records
-    a conservative grade and tells you about it.
+    Two failure modes, handled differently on purpose:
+
+    - A malformed response is retried once, then recorded as 0 and logged. One
+      bad completion should not end a 1000-judgment run.
+    - A GroqError propagates. It usually means the quota is gone, and every
+      subsequent call would fail the same way; defaulting those to 0 would write
+      hundreds of fake "not relevant" grades into the cache permanently and make
+      retrieval look catastrophically broken. Aborting is recoverable - the cache
+      flushes every 20 judgments, so a re-run resumes from the last flush.
     """
     prompt = build_prompt(pair, version)
     for attempt in range(2):
         try:
-            response = chat(prompt, model=model, max_completion_tokens=512)
+            response = chat(prompt, model=model, max_completion_tokens=JUDGE_MAX_TOKENS)
         except GroqError as exc:
-            print(f"judge: API error on {pair.cache_key}: {exc}", file=sys.stderr)
-            break
+            raise GroqError(f"judging {pair.cache_key} failed: {exc}") from exc
         grade = parse_grade(response)
         if grade is not None:
             return grade
@@ -311,7 +321,10 @@ def judge_pair(
             f"(attempt {attempt + 1}): {response[:120]!r}",
             file=sys.stderr,
         )
-    print(f"judge: defaulting {pair.cache_key} to grade 0", file=sys.stderr)
+    print(
+        f"judge: unparseable twice, defaulting {pair.cache_key} to grade 0",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -366,7 +379,8 @@ def judge_all(
         cache if cache is not None else JudgeCache(signature=prompt_signature(model))
     )
     grades = {
-        p.cache_key: g for p, g in judge_pairs(pairs, cache, model, progress=progress)
+        p.cache_key: g
+        for p, g in judge_pairs(pairs, cache, model, progress=progress, version=version)
     }
     cache.save()
     return grades
