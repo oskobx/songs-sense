@@ -32,13 +32,14 @@ from src.eval.judge import (
     judge_pair,
     prompt_signature,
 )
+from src.eval.grade_calibration import GRADE_FIELD, REGRADE_FIELD
 from src.eval.paths import EVAL_DIR, CALIBRATION_PATH, ensure_eval_dir
 
 REPORT_PATH = EVAL_DIR / "calibration_report.json"
 GRADE_LABELS = ["0", "1", "2", "3"]
 
 
-def load_graded_pairs() -> tuple[list[dict], list[str]]:
+def load_graded_pairs(field: str = GRADE_FIELD) -> tuple[list[dict], list[str]]:
     """Return (graded pairs, the query languages the calibration set covers).
 
     Pairs carry a "batch" stamp; sets written before batching existed are batch 1.
@@ -51,7 +52,7 @@ def load_graded_pairs() -> tuple[list[dict], list[str]]:
         sys.exit(1)
 
     payload = json.loads(CALIBRATION_PATH.read_text(encoding="utf-8"))
-    graded = [p for p in payload["pairs"] if p.get("human_grade") is not None]
+    graded = [p for p in payload["pairs"] if p.get(field) is not None]
     ungraded = len(payload["pairs"]) - len(graded)
     if not graded:
         print("No human grades yet — run grade_calibration first.", file=sys.stderr)
@@ -177,6 +178,80 @@ def agreement(human: list[int], judged: list[int]) -> dict:
         "judge_relevant": sum(1 for g in judged if g >= 2),
         "human_relevant": sum(1 for g in human if g >= 2),
     }
+
+
+def print_intra_rater(pairs: list[dict]) -> dict | None:
+    """Agreement between the grader's two independent passes over the same pairs.
+
+    This is the ceiling on judge-vs-human kappa. If the same person, shown the
+    same pair twice, agrees with themselves at kappa 0.6, no judge can be shown
+    to agree with "the human" above roughly that - the disagreement is in the
+    target, not the model.
+    """
+    both = [
+        p
+        for p in pairs
+        if p.get(GRADE_FIELD) is not None and p.get(REGRADE_FIELD) is not None
+    ]
+    if not both:
+        return None
+
+    round1 = [p[GRADE_FIELD] for p in both]
+    round2 = [p[REGRADE_FIELD] for p in both]
+    stats = agreement(round1, round2)
+
+    print("\n" + "=" * 72)
+    print(f"=== Intra-rater agreement (round 1 vs blind round 2), n={len(both)} ===\n")
+    # Deliberately not metrics.kappa_reading() - that table reads a judge's
+    # trustworthiness, and this number is the grader against themselves.
+    print(f"  Quadratic-weighted kappa   {stats['quadratic_weighted_kappa']:.3f}")
+    print(f"  Spearman correlation       {stats['spearman']:.3f}")
+    print(f"  Exact match                {stats['exact_match_rate']:.3f}")
+    print(f"  Within 1 grade             {stats['within_one_rate']:.3f}")
+    print()
+    print("  Confusion matrix (rows = round 1, cols = round 2)")
+    print("           " + "".join(f"{g:>6}" for g in GRADE_LABELS) + "   total")
+    for i, row in enumerate(stats["confusion_matrix"]):
+        print(f"  round1 {i} " + "".join(f"{c:>6}" for c in row) + f"   {sum(row):>5}")
+    totals = [
+        sum(stats["confusion_matrix"][i][j] for i in range(4))
+        for j in range(len(GRADE_LABELS))
+    ]
+    print("  total    " + "".join(f"{c:>6}" for c in totals) + f"   {sum(totals):>5}")
+    print(
+        f"\n  'relevant' (>=2): round 1 {stats['human_relevant']}/{len(both)}, "
+        f"round 2 {stats['judge_relevant']}/{len(both)}"
+    )
+    print(
+        "\n  This is the ceiling. A judge cannot be shown to agree with this grader\n"
+        "  much above this number, however good the prompt gets."
+    )
+    return stats
+
+
+def print_regrade_comparison(
+    pairs: list[dict], versions: list[str], results: dict, model: str
+) -> dict:
+    """Re-run each version against round-2 grades on the re-graded pairs only."""
+    both_idx = [
+        i
+        for i, p in enumerate(pairs)
+        if p.get(GRADE_FIELD) is not None and p.get(REGRADE_FIELD) is not None
+    ]
+    round1 = [pairs[i][GRADE_FIELD] for i in both_idx]
+    round2 = [pairs[i][REGRADE_FIELD] for i in both_idx]
+
+    print("\n" + "=" * 72)
+    print(f"=== Judge kappa under each grading round, n={len(both_idx)} ===\n")
+    print("  version    round 1     round 2       delta")
+    out: dict[str, dict] = {}
+    for version in versions:
+        judged = [results[version]["judge_grades"][i] for i in both_idx]
+        k1 = metrics.quadratic_weighted_kappa(round1, judged)
+        k2 = metrics.quadratic_weighted_kappa(round2, judged)
+        print(f"  {version:<9}{k1:>9.3f}{k2:>11.3f}{k2 - k1:>+12.3f}")
+        out[version] = {"round1": k1, "round2": k2, "delta": k2 - k1}
+    return out
 
 
 def main() -> None:
@@ -309,6 +384,13 @@ def main() -> None:
     print()
     print_disagreements(pairs, human, active["judge_grades"])
 
+    intra = print_intra_rater(pairs)
+    regrade_comparison = (
+        print_regrade_comparison(pairs, versions, results, args.model)
+        if intra
+        else None
+    )
+
     print(
         f"\n  Kappa on a batch of n={len(pairs)} has a wide confidence interval. "
         "State that in the\n  writeup rather than over-claiming."
@@ -342,6 +424,8 @@ def main() -> None:
                 "human_grades": human,
                 "batches": [p["batch"] for p in pairs],
                 "self_agreement": consistency,
+                "intra_rater": intra,
+                "regrade_comparison": regrade_comparison,
                 "results": results,
             },
             indent=2,

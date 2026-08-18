@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-08-18T00:53:42+00:00",
+  "measured_at": "2026-08-18T15:24:36+00:00",
   "model": "openai/gpt-oss-120b",
   "versions": [
     "v1",
@@ -131,6 +131,58 @@
     2
   ],
   "self_agreement": null,
+  "intra_rater": {
+    "n": 30,
+    "quadratic_weighted_kappa": 0.4181818181818181,
+    "spearman": 0.4306363286319301,
+    "exact_match_rate": 0.3333333333333333,
+    "within_one_rate": 0.8666666666666667,
+    "confusion_matrix": [
+      [
+        2,
+        2,
+        2,
+        0
+      ],
+      [
+        3,
+        6,
+        3,
+        2
+      ],
+      [
+        0,
+        3,
+        1,
+        3
+      ],
+      [
+        0,
+        0,
+        2,
+        1
+      ]
+    ],
+    "judge_relevant": 14,
+    "human_relevant": 10
+  },
+  "regrade_comparison": {
+    "v1": {
+      "round1": 0.24302788844621503,
+      "round2": 0.37254901960784326,
+      "delta": 0.12952113116162822
+    },
+    "v2": {
+      "round1": 0.10048622366288484,
+      "round2": 0.27450980392156876,
+      "delta": 0.17402358025868392
+    },
+    "v3": {
+      "round1": 0.2126514131897712,
+      "round2": 0.339622641509434,
+      "delta": 0.1269712283196628
+    }
+  },
   "results": {
     "v1": {
       "signature": "openai/gpt-oss-120b::v1",

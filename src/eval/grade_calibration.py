@@ -21,11 +21,18 @@ Pairs are stamped with a batch number. --add appends a fresh batch drawn from
 queries the set has never used, which is what makes a held-out split possible:
 fit the judge prompt on one batch, report the kappa on another.
 
+--regrade re-presents an already-graded batch in a fresh random order and writes
+to a separate field, without ever showing the original grades. The two rounds
+then act as two independent raters, and their agreement is an upper bound on any
+kappa the judge can reach against this grader: a human who agrees with themselves
+0.7 of the time cannot be matched more closely than that by anything.
+
 Usage:
     python -m src.eval.grade_calibration
     python -m src.eval.grade_calibration --languages en,pl,de
     python -m src.eval.grade_calibration --resample --seed 7
-    python -m src.eval.grade_calibration --add 25    # append a new batch
+    python -m src.eval.grade_calibration --add 25       # append a new batch
+    python -m src.eval.grade_calibration --regrade 1   # blind re-grade of batch 1
 
 Keys:
     3 = excellent   2 = good   1 = marginal   0 = not relevant
@@ -39,15 +46,13 @@ import json
 import random
 import sys
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from src.eval.paths import CALIBRATION_PATH, QUERIES_PATH, ensure_eval_dir
-from src.eval.retrieval_runner import (
-    RetrievedPassage,
-    config_description,
-    db_connection,
-    retrieve_vibe,
-)
 from src.utils.keypress import getch
+
+if TYPE_CHECKING:
+    from src.eval.retrieval_runner import RetrievedPassage
 
 TARGET_PAIRS = 30
 QUERIES_TO_SAMPLE = 10  # x 3 bands = 30 pairs, 10 per band
@@ -63,6 +68,11 @@ RETRIEVAL_DEPTH = 30
 # Languages the grader can judge reliably. Sampling outside this set produces
 # grades the kappa should not be computed from.
 DEFAULT_LANGUAGES: list[str] = ["en", "pl"]
+
+# Round-1 grades live in "human_grade". A blind re-grade writes here instead, so
+# the originals survive and the two rounds can be compared as two raters.
+GRADE_FIELD = "human_grade"
+REGRADE_FIELD = "human_grade_2"
 
 GRADE_LEGEND = "3 = excellent   2 = good   1 = marginal   0 = not relevant"
 
@@ -174,8 +184,8 @@ def band_targets(n_pairs: int) -> dict[str, int]:
 
 
 def _pick_from_band(
-    results: list[RetrievedPassage], band: tuple[int, int], rng: random.Random
-) -> RetrievedPassage | None:
+    results: list["RetrievedPassage"], band: tuple[int, int], rng: random.Random
+) -> "RetrievedPassage | None":
     low, high = band
     in_band = [r for r in results if low <= r.rank <= high]
     return rng.choice(in_band) if in_band else None
@@ -195,6 +205,10 @@ def sample_pairs(
     Bands are then trimmed to their exact targets — 25 pairs comes out 9/8/8
     rather than dropping a band or over-filling one.
     """
+    # Imported here, not at module scope: grading and re-grading need neither the
+    # database nor the embedding models, and importing them costs seconds of torch.
+    from src.eval.retrieval_runner import db_connection, retrieve_vibe
+
     rng = random.Random(seed)
     targets = band_targets(n_pairs)
     seen_passages = set(exclude_passage_ids or ())
@@ -272,6 +286,8 @@ def build_calibration_set(seed: int, languages: list[str]) -> list[dict]:
 
 
 def save_calibration(pairs: list[dict], meta: dict) -> None:
+    from src.eval.retrieval_runner import config_description
+
     ensure_eval_dir()
     payload = {
         "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -331,17 +347,30 @@ def _render(pair: dict, index: int, total: int) -> None:
     print("        > ", end="", flush=True)
 
 
-def grade(pairs: list[dict], meta: dict) -> None:
-    total = len(pairs)
-    history: list[int] = []
-    index = 0
+def grade(
+    pairs: list[dict],
+    meta: dict,
+    order: list[int] | None = None,
+    field: str = GRADE_FIELD,
+) -> None:
+    """Grade pairs[order] one at a time, writing into `field`.
 
-    while index < total:
-        if pairs[index]["human_grade"] is not None:
-            index += 1
+    `order` lets a blind re-grade re-present the same pairs in a fresh sequence;
+    `field` keeps a second round from overwriting the first. Neither round ever
+    displays the other's grades - that is the whole point of the exercise.
+    """
+    order = list(range(len(pairs))) if order is None else order
+    total = len(order)
+    history: list[int] = []
+    position = 0
+
+    while position < total:
+        index = order[position]
+        if pairs[index].get(field) is not None:
+            position += 1
             continue
 
-        _render(pairs[index], index + 1, total)
+        _render(pairs[index], position + 1, total)
         try:
             key = getch().lower()
         except (KeyboardInterrupt, EOFError):
@@ -350,17 +379,17 @@ def grade(pairs: list[dict], meta: dict) -> None:
 
         if key in "0123" and key != "":
             print(key)
-            pairs[index]["human_grade"] = int(key)
-            history.append(index)
+            pairs[index][field] = int(key)
+            history.append(position)
             # save after each entry; survives interruption
             save_calibration(pairs, meta)
-            index += 1
+            position += 1
         elif key == "u":
             if not history:
                 print("u\n        nothing to undo")
                 continue
-            index = history.pop()
-            pairs[index]["human_grade"] = None
+            position = history.pop()
+            pairs[order[position]][field] = None
             save_calibration(pairs, meta)
             print("u\n        undone")
         elif key == "q":
@@ -388,6 +417,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--regrade",
+        type=int,
+        default=0,
+        metavar="BATCH",
+        help=(
+            "Blind re-grade of an already-graded batch: fresh random order, "
+            f"original grades never shown, written to '{REGRADE_FIELD}'."
+        ),
+    )
+    parser.add_argument(
         "--seed", type=int, default=42, help="Sampling seed (default: 42)"
     )
     parser.add_argument(
@@ -411,9 +450,80 @@ def main() -> None:
         print("--languages must name at least one language", file=sys.stderr)
         sys.exit(1)
 
-    if args.add and args.resample:
-        print("--add and --resample are mutually exclusive", file=sys.stderr)
+    exclusive = [
+        name
+        for name, on in (
+            ("--add", bool(args.add)),
+            ("--resample", args.resample),
+            ("--regrade", bool(args.regrade)),
+        )
+        if on
+    ]
+    if len(exclusive) > 1:
+        print(f"{' and '.join(exclusive)} are mutually exclusive", file=sys.stderr)
         sys.exit(1)
+
+    if args.regrade:
+        if not CALIBRATION_PATH.exists():
+            print(f"{CALIBRATION_PATH.name} not found.", file=sys.stderr)
+            sys.exit(1)
+        pairs, meta = load_calibration()
+        batch_indices = [i for i, p in enumerate(pairs) if p["batch"] == args.regrade]
+        if not batch_indices:
+            print(f"no pairs in batch {args.regrade}", file=sys.stderr)
+            sys.exit(1)
+
+        ungraded = [i for i in batch_indices if pairs[i].get(GRADE_FIELD) is None]
+        if ungraded:
+            print(
+                f"batch {args.regrade} has {len(ungraded)} pairs without a round-1 "
+                "grade; re-grading it would produce nothing to compare against.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # A distinct seed so the re-grade order cannot echo the original one.
+        regrade_seed = args.seed + 1000 + args.regrade
+        order = list(batch_indices)
+        random.Random(regrade_seed).shuffle(order)
+
+        already = sum(
+            1 for i in batch_indices if pairs[i].get(REGRADE_FIELD) is not None
+        )
+        meta.setdefault("regrades", [])
+        if not any(r["batch"] == args.regrade for r in meta["regrades"]):
+            meta["regrades"].append(
+                {
+                    "batch": args.regrade,
+                    "field": REGRADE_FIELD,
+                    "seed": regrade_seed,
+                    "n": len(batch_indices),
+                    "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                }
+            )
+            save_calibration(pairs, meta)
+
+        print(
+            f"Blind re-grade of batch {args.regrade}: {len(batch_indices)} pairs "
+            f"in fresh order (seed {regrade_seed})."
+        )
+        print(f"Your original grades are not shown. Writing to '{REGRADE_FIELD}'.")
+        if already:
+            print(f"Resuming: {already} already re-graded.")
+        print()
+
+        grade(pairs, meta, order=order, field=REGRADE_FIELD)
+
+        done = sum(1 for i in batch_indices if pairs[i].get(REGRADE_FIELD) is not None)
+        print("\n" + "─" * 72)
+        print(f"Re-graded {done}/{len(batch_indices)} pairs of batch {args.regrade}")
+        if done < len(batch_indices):
+            print(
+                f"Resume with: python -m src.eval.grade_calibration --regrade {args.regrade}"
+            )
+        else:
+            print("Next: python -m src.eval.calibrate --versions v3")
+        return
 
     if args.add:
         if not CALIBRATION_PATH.exists():
