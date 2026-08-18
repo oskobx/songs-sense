@@ -1,0 +1,859 @@
+{
+  "generated_at": "2026-08-16T18:39:36+00:00",
+  "model": "openai/gpt-oss-120b",
+  "multiplier": 1.4,
+  "target_distribution": {
+    "en": 70,
+    "pl": 15,
+    "de": 10,
+    "es": 5
+  },
+  "counts_by_language": {
+    "en": 98,
+    "pl": 21,
+    "de": 14,
+    "es": 7
+  },
+  "candidates": [
+    {
+      "raw_id": "raw_0001",
+      "query": "late‑night drive with the city lights humming",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0002",
+      "query": "the exact instant you feel completely free",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0003",
+      "query": "when the rain makes everything feel softer",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0004",
+      "query": "that bittersweet feeling after a goodbye",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0005",
+      "query": "the rush of adrenaline before a big jump",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0006",
+      "query": "quiet mornings when coffee smells like hope",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0007",
+      "query": "the warm glow of a sunrise after a heartbreak",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0008",
+      "query": "when the crowd disappears and you’re alone on stage",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0009",
+      "query": "the ache of missing someone far away",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0010",
+      "query": "the spark of curiosity on a first date",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0011",
+      "query": "the calm after finishing a marathon",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0012",
+      "query": "the lingering doubt before a life‑changing decision",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0013",
+      "query": "when nostalgia hits watching old home videos",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0014",
+      "query": "the fierce determination before a midnight deadline",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0015",
+      "query": "the gentle reassurance of a loved one’s hug",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0016",
+      "query": "the nervous excitement of moving to a new city",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0017",
+      "query": "the quiet satisfaction of a perfect cup of tea",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0018",
+      "query": "the restless yearning when the road calls",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0019",
+      "query": "the peaceful solitude of a forest at dusk",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0020",
+      "query": "the sudden clarity after a sleepless night",
+      "language": "en",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0021",
+      "query": "Driving through a rain‑soaked city at midnight",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0022",
+      "query": "Waking up to a sunrise after a sleepless night",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0023",
+      "query": "Sipping coffee while watching the world snow fall",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0024",
+      "query": "First dance at a wedding under twinkling lights",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0025",
+      "query": "Late‑night study session with a cup of tea",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0026",
+      "query": "Road trip with friends on an endless highway",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0027",
+      "query": "Quiet Sunday morning reading in a sunlit room",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0028",
+      "query": "Heartbreak after a text that never came back",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0029",
+      "query": "Celebrating a promotion with a rooftop party",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0030",
+      "query": "Cozy blanket binge‑watching movies on a stormy day",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0031",
+      "query": "Feeling unstoppable before a big competition",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0032",
+      "query": "Walking home after a long shift in the rain",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0033",
+      "query": "First day of college nerves and excitement",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0034",
+      "query": "Saying goodbye at the airport gate, tears rolling",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0035",
+      "query": "Mid‑summer night camping by a crackling fire",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0036",
+      "query": "Morning jog with sunrise breaking over the hills",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0037",
+      "query": "Quiet reflection after a meditation retreat",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0038",
+      "query": "Dancing alone in the kitchen while no one’s watching",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0039",
+      "query": "Late‑night drive with the windows down and music loud",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0040",
+      "query": "Reuniting with an old friend over a backyard grill",
+      "language": "en",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0041",
+      "query": "Midnight drives with city lights flickering",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0042",
+      "query": "Quiet mornings feeling hopeful and fresh",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0043",
+      "query": "Rainy afternoons longing for gentle comfort",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0044",
+      "query": "Late‑night thoughts drifting into endless wonder",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0045",
+      "query": "Sunset vibes that feel bittersweet yet uplifting",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0046",
+      "query": "Cozy evenings wrapped in warm nostalgia",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0047",
+      "query": "Early sunrise optimism after a restless night",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0048",
+      "query": "Chill moments when the world feels weightless",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0049",
+      "query": "Heart‑pounding excitement before a big adventure",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0050",
+      "query": "Soft melancholy that still feels reassuring",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0051",
+      "query": "Quiet confidence while working on a new project",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0052",
+      "query": "Playful energy for spontaneous road trips",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0053",
+      "query": "Reflective calm after a long day’s chaos",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0054",
+      "query": "Gentle yearning for distant places",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0055",
+      "query": "Bright enthusiasm for fresh starts",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0056",
+      "query": "Mellow focus during late‑night study sessions",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0057",
+      "query": "Quiet sadness blended with hopeful anticipation",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0058",
+      "query": "Joyful anticipation of unexpected reunions",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0059",
+      "query": "Peaceful solitude under a starlit sky",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0060",
+      "query": "Slight anxiety mixed with daring curiosity",
+      "language": "en",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0061",
+      "query": "late night drive through neon city streets",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0062",
+      "query": "golden sunrise over a quiet lake",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0063",
+      "query": "rainy afternoon coffee shop vibes",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0064",
+      "query": "crackling fireplace on a snow‑filled evening",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0065",
+      "query": "wind‑blown desert road at sunset",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0066",
+      "query": "misty forest path with dappled light",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0067",
+      "query": "late‑summer carnival lights and cotton candy",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0068",
+      "query": "stormy coastline with crashing waves",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0069",
+      "query": "midnight rooftop party under starry skies",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0070",
+      "query": "autumn leaves swirling in a park",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0071",
+      "query": "early morning fog over a sleepy town",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0072",
+      "query": "cozy cabin cabin nestled in pine woods",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0073",
+      "query": "sun‑kissed meadow filled with wildflowers",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0074",
+      "query": "city skyline glittering after dark",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0075",
+      "query": "quiet mountain summit at dawn",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0076",
+      "query": "bright carnival parade with confetti rain",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0077",
+      "query": "soft candlelight dinner for two",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0078",
+      "query": "glittering snowflakes falling on a quiet street",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0079",
+      "query": "sunset over a desert oasis with palm trees",
+      "language": "en",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0080",
+      "query": "late-night drives with a broken heart",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0081",
+      "query": "waking up to sunshine after a fight",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0082",
+      "query": "missing the feeling of being home again",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0083",
+      "query": "first date nerves and hopeful smiles",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0084",
+      "query": "the quiet after a love you let slip away",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0085",
+      "query": "celebrating a friendship that survived distance",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0086",
+      "query": "longing for the warmth of an old flame",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0087",
+      "query": "the ache of watching them walk out",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0088",
+      "query": "quiet moments when words aren’t needed",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0089",
+      "query": "finding comfort in strangers’ laughter",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0090",
+      "query": "the calm before saying “I love you”",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0091",
+      "query": "the emptiness after a goodbye text",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0092",
+      "query": "reconnecting after years apart",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0093",
+      "query": "the rush of a secret crush at work",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0094",
+      "query": "the bittersweet nostalgia of summer love",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0095",
+      "query": "holding back tears during a wedding toast",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0096",
+      "query": "the excitement of planning a surprise",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0097",
+      "query": "the relief of finally letting go",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0098",
+      "query": "the glow of a sunrise after a storm",
+      "language": "en",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0099",
+      "query": "kiedy nagle czuję, że wszystko się kończy",
+      "language": "pl",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0100",
+      "query": "tęsknota za domem po długiej podróży",
+      "language": "pl",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0101",
+      "query": "radosny nastrój po pierwszej miłości wiosną",
+      "language": "pl",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0102",
+      "query": "głębokie uczucie samotności w deszczowy wieczór",
+      "language": "pl",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0103",
+      "query": "nadzieja na lepsze jutro po trudnym dniu",
+      "language": "pl",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0104",
+      "query": "Siedzę w kawiarni, patrząc przez okno w deszczowy wieczór",
+      "language": "pl",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0105",
+      "query": "Powrót do domu po burzliwej kłótni, potrzebuję ukojenia",
+      "language": "pl",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0106",
+      "query": "W drodze na spontaniczny wypad z przyjaciółmi, szukam energii",
+      "language": "pl",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0107",
+      "query": "Samotny spacer po plaży o wschodzie słońca, chce poczuć spokój",
+      "language": "pl",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0108",
+      "query": "Słoneczny poranek pełen optymizmu",
+      "language": "pl",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0109",
+      "query": "Melancholijna nostalgia przy deszczu",
+      "language": "pl",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0110",
+      "query": "Energia nocnego miasta, gdy wszystko pulsuje",
+      "language": "pl",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0111",
+      "query": "Spokój i refleksja przy filiżance herbaty",
+      "language": "pl",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0112",
+      "query": "Kiedy wschodzi słońce nad morzem i w powietrzu pachnie sól",
+      "language": "pl",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0113",
+      "query": "Nocne miasto pod neonami, mokre brukowane ulice",
+      "language": "pl",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0114",
+      "query": "Jesienna mgła w lesie, szeleszczące liście pod stopami",
+      "language": "pl",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0115",
+      "query": "Rozgrzane podwórko z latem, dźwięk lodów i śmiech dzieci",
+      "language": "pl",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0116",
+      "query": "Czuję się samotny po rozstaniu, potrzebuję muzyki na pocieszenie",
+      "language": "pl",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0117",
+      "query": "Chcę piosenki o pierwszej miłości, która jeszcze nie jest odwzajemniona",
+      "language": "pl",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0118",
+      "query": "Szukam utworów idealnych na romantyczny wieczór przy świecach",
+      "language": "pl",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0119",
+      "query": "Muzyka, która odda atmosferę tajemniczej, nieodwzajemnionej fascynacji",
+      "language": "pl",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0120",
+      "query": "Wenn der Regen plötzlich die Stadt in Melancholie taucht",
+      "language": "de",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0121",
+      "query": "Dieses Kribbeln, wenn du plötzlich jemand Neues triffst",
+      "language": "de",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0122",
+      "query": "Der Moment, in dem du dich endlich von der Vergangenheit löst",
+      "language": "de",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0123",
+      "query": "Ein langer Roadtrip durch die Berge, Sonnenuntergang im Hintergrund",
+      "language": "de",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0124",
+      "query": "Späte Nacht, nur ich und mein Laptop, kreative Schreibstimmung",
+      "language": "de",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0125",
+      "query": "Frühstück auf dem Balkon, Kaffee und entspannte Sonntagslaune",
+      "language": "de",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0126",
+      "query": "Ein leichter Hauch von Sommersehnsucht nach Freiheit",
+      "language": "de",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0127",
+      "query": "Gefühl von heimlicher Aufregung vor dem ersten Konzert",
+      "language": "de",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0128",
+      "query": "Melancholisch‑verspielt, wenn Regen das Fenster klopft",
+      "language": "de",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0129",
+      "query": "Sonnige Strandtage mit warmem Sand und kühlen Drinks",
+      "language": "de",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0130",
+      "query": "Abendrot über der Stadt, Lichter flackern im Regen",
+      "language": "de",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0131",
+      "query": "Nebelige Waldspaziergänge, das Rascheln von Laub und Lichtstrahlen",
+      "language": "de",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0132",
+      "query": "Ich will Lieder, die das stille Verliebtsein beschreiben",
+      "language": "de",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0133",
+      "query": "Songs, die die Unsicherheit nach dem ersten Date einfangen",
+      "language": "de",
+      "category": "relational"
+    },
+    {
+      "raw_id": "raw_0134",
+      "query": "cuando descubro que todo cambió y ya no hay marcha atrás",
+      "language": "es",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0135",
+      "query": "ese instante en que la nostalgia se vuelve dulce y melancólica",
+      "language": "es",
+      "category": "emotional"
+    },
+    {
+      "raw_id": "raw_0136",
+      "query": "Conduciendo bajo la lluvia después de una discusión",
+      "language": "es",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0137",
+      "query": "Mañana de domingo sin planes, con café y ganas de soñar",
+      "language": "es",
+      "category": "situational"
+    },
+    {
+      "raw_id": "raw_0138",
+      "query": "Una tarde de melancolía dulce y recuerdos lejanos",
+      "language": "es",
+      "category": "abstract"
+    },
+    {
+      "raw_id": "raw_0139",
+      "query": "café de madrugada con lluvia suave en la ventana",
+      "language": "es",
+      "category": "sensory"
+    },
+    {
+      "raw_id": "raw_0140",
+      "query": "cuando me enamoro sin darme cuenta",
+      "language": "es",
+      "category": "relational"
+    }
+  ]
+}

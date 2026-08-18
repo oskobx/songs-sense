@@ -18,7 +18,9 @@ wheels/
 *.env
 
 # Data files (raw scrapes, models, embeddings)
-data/
+data/*
+!data/eval/
+!data/eval/*.json
 *.db
 *.sqlite
 *.parquet
@@ -46,5 +48,3 @@ logs/
 htmlcov/
 
 # Jupyter
-.ipynb_checkpoints/!data/eval/
-!data/eval/*.json
