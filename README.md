@@ -28,7 +28,7 @@ fresh order, original grades hidden), and the judge re-scored pairs twice.
 | Judge vs human, held-out batch 2 | quadratic-weighted kappa | 0.46 | 25 |
 | Judge vs human, tuning batch 1 (re-graded) | quadratic-weighted kappa | 0.34 | 30 |
 | Human vs self, blind re-grade | quadratic-weighted kappa | 0.42 | 30 |
-| Judge vs self, repeated calls | exact-repeat rate | 0.74–0.90 | 10 |
+| Judge vs self, repeated calls | exact-repeat rate | 0.88 | 50 |
 
 The judge agrees with the grader about as closely as the grader agrees with
 themselves, so the ceiling here is human labelling noise rather than the model.
