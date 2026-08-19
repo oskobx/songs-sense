@@ -2,11 +2,14 @@
 #
 # songs-sense API image.
 #
-# Both embedding models are baked in at build time: a cold container must not
-# pull ~2.5 GB from HuggingFace on boot. That makes the image large but the
-# boot fast and offline-safe. EMBED_MULTILINGUAL is read at runtime, so the
-# same image serves both the full multilingual deployment and the cheaper
-# English-only one — the m3 weights are simply not loaded when it is false.
+# Production is English-only, so only bge-base is baked in. A cold container
+# must not pull weights from HuggingFace on boot, and baking bge-m3 as well
+# would add ~2.5 GB that this deployment never loads.
+#
+# EMBED_MULTILINGUAL is still read at runtime and still defaults to true in the
+# application, so local runs outside this image keep multilingual routing. The
+# image sets it to false. Setting it back to true *in this image* would make the
+# app download bge-m3 on first boot — don't; rebuild with the model baked in.
 #
 # Build for the deploy target's architecture, not the laptop's:
 #   docker build --platform linux/amd64 -t songs-sense .
@@ -38,22 +41,20 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove build-essential zlib1g-dev \
  && rm -rf /var/lib/apt/lists/*
 
-# Bake the weights. Instantiating each model is what populates HF_HOME, and it
+# Bake the weights. Instantiating the model is what populates HF_HOME, and it
 # also fails the build now rather than at 3am if a repo id ever moves.
 RUN <<'PY' python
-from FlagEmbedding import BGEM3FlagModel
 from sentence_transformers import SentenceTransformer
 
 SentenceTransformer("BAAI/bge-base-en-v1.5")
-BGEM3FlagModel("BAAI/bge-m3", use_fp16=False)
-print("models cached under /opt/models")
+print("bge-base cached under /opt/models")
 PY
 
 COPY src/ ./src/
 COPY static/ ./static/
 
-# Default on; set to false on a small instance to skip the bge-m3 load.
-ENV EMBED_MULTILINGUAL=true
+# English-only: bge-m3 is not in this image, so it must not be loaded.
+ENV EMBED_MULTILINGUAL=false
 EXPOSE 8000
 
 # Render supplies $PORT; default to 8000 for local runs.

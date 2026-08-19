@@ -4,22 +4,32 @@ Manual steps, in order. Nothing here is automated; run it once and note anything
 that drifts.
 
 Two moving parts: Postgres with pgvector on **Neon**, and the FastAPI app as a
-Docker service on **Render**. The app holds the embedding models in memory; the
-vector index lives on the database side, so app memory is essentially "which
-models did you load".
+Docker service on **Render**.
+
+**Production is English-only.** The image bakes only `bge-base-en-v1.5` and sets
+`EMBED_MULTILINGUAL=false`. Non-English queries still work — the language is
+still detected and reported — but they are embedded with the English model and
+get no language boost, so pl/de/es quality is lower than it is locally.
+Multilingual routing via bge-m3 remains available for local development, where
+the flag defaults to true and the model downloads on first use.
 
 ---
 
 ## 0. Before you start
 
-- The image builds for the host architecture. Render runs **amd64**; a Mac
-  builds **arm64**. Render builds the Dockerfile itself, so this only matters if
-  you build locally and push a registry image:
+- The image builds for the host architecture. Render runs **amd64**; a Mac builds
+  **arm64**. Render builds the Dockerfile itself, so this only matters if you
+  build locally and push a registry image:
   `docker build --platform linux/amd64 -t songs-sense .`
-- The image bakes both `bge-base-en-v1.5` and `bge-m3` and lands at **~6.25 GB**.
-  If Render's build ever chokes on that, drop the `BGEM3FlagModel(...)` line from
-  the prefetch step in the `Dockerfile` — with `EMBED_MULTILINGUAL=false` the m3
-  weights are never loaded anyway, and the image drops by roughly 2.5 GB.
+- Image size: **3.53 GB compressed** (what Render pulls), 6.23 GB uncompressed on
+  disk. Python site-packages is 5.3 GB of that — torch dominates — against
+  419 MB of model weights. Note `docker images` reports *disk usage* including
+  build cache, which reads much higher; use `docker images --tree` for the real
+  content size.
+- Do not set `EMBED_MULTILINGUAL=true` on this image. bge-m3 is not baked in, so
+  the app would try to download ~2.2 GB from HuggingFace on first boot. If you
+  ever want multilingual hosted, add the model back to the prefetch step in the
+  `Dockerfile` and rebuild.
 
 ---
 
@@ -37,13 +47,15 @@ models did you load".
    ./scripts/export_for_neon.sh
    ```
    Writes `data/neon/01_extension.sql` and `data/neon/02_songs_passages.dump`,
-   and prints the size against Neon's free-tier limit.
+   and prints the size against Neon's free-tier limit. The dump carries both
+   embedding columns — it doubles as a full local backup — and the multilingual
+   one is dropped after restore in step 4c.
 
 ### The size problem
 
-As of the current corpus (9,381 songs / 85,879 passages) the compressed dump is
-**730 MB**, against a **512 MB** free tier. It does not fit. Restored, it is
-larger again:
+At the current corpus (9,381 songs / 85,879 passages) the compressed dump is
+**730 MB**, against a **512 MB** free tier. It does not fit as-is. Restored, it
+is larger again:
 
 | Object | Size |
 |---|---|
@@ -54,12 +66,12 @@ larger again:
 | — of which HNSW index on `embedding_multi` | 651 MB |
 | `songs` table | 21 MB |
 
-The multilingual column and its HNSW index are **987 MB of that**, over half the
-total, and production runs `EMBED_MULTILINGUAL=false`. So the cheap fix is to
-restore everything and then drop what production will not use (step 4c below).
+`embedding_multi` and its HNSW index are **987 MB** of that, over half the
+restored total, and English-only production never reads them. Dropping them
+after restore is the standard step, not a fallback.
 
-Alternatives if you want multilingual search hosted: pay for a larger Neon plan,
-or restore a subset of songs (filter by `tier`) for the demo.
+If that still does not fit, restore a subset of songs (filter by `tier`) for the
+hosted demo, or move to a paid Neon plan.
 
 4. Restore:
    ```bash
@@ -70,16 +82,13 @@ or restore a subset of songs (filter by `tier`) for the demo.
    pg_restore --no-owner --no-privileges --verbose -d "$NEON_URL" \
      data/neon/02_songs_passages.dump
 
-   # c. only if you are staying on a small plan — reclaims ~987 MB
+   # c. drop what English-only production does not use — reclaims ~987 MB
    psql "$NEON_URL" -c "DROP INDEX IF EXISTS passages_embedding_multi_hnsw_idx;"
    psql "$NEON_URL" -c "ALTER TABLE passages DROP COLUMN IF EXISTS embedding_multi;"
    ```
-   Dropping `embedding_multi` makes `EMBED_MULTILINGUAL=true` impossible on that
-   database — `semantic_search` selects that column for pl/de/es queries and will
-   error. Keep the two settings consistent.
 
-5. Confirm the HNSW index survived the restore; `pg_restore` normally carries it,
-   but rebuild if not:
+5. Confirm the HNSW index on `embedding` survived the restore; `pg_restore`
+   normally carries it, but rebuild if not:
    ```bash
    psql "$NEON_URL" -c "\di+ passages*"
    # if passages_embedding_hnsw_idx is missing:
@@ -100,7 +109,7 @@ or restore a subset of songs (filter by `tier`) for the demo.
 
 1. New **Web Service** → connect the repo → runtime **Docker** (it will find the
    `Dockerfile` at the repo root).
-2. Start command — Render injects `$PORT`, and the image's default `CMD` already
+2. Start command — Render injects `$PORT` and the image's default `CMD` already
    honours it, so leave it blank. If you must set it explicitly:
    ```
    uvicorn src.api.app:app --host 0.0.0.0 --port $PORT
@@ -110,27 +119,26 @@ or restore a subset of songs (filter by `tier`) for the demo.
    | Key | Value |
    |---|---|
    | `DATABASE_URL` | the Neon connection string, keep `?sslmode=require` |
-   | `EMBED_MULTILINGUAL` | `false` for the small instance, `true` for the large one |
 
-   Nothing else is read at runtime. `GROQ_KEY` is eval-only and not needed here.
+   `EMBED_MULTILINGUAL` is already `false` in the image and does not need setting.
+   Nothing else is read at runtime — `GROQ_KEY` is eval-only.
 
 ### Instance size
 
-Measured on the built image with the real corpus, cgroup high-water mark after
-twelve mixed-language queries:
+Measured on the built image against the real corpus, cgroup high-water mark after
+a batch of mixed-language queries:
 
-| Setting | Models loaded | Peak RSS | Steady | Instance to pick |
-|---|---|---|---|---|
-| `EMBED_MULTILINGUAL=true` | bge-base + bge-m3 | **1.95 GB** | 1.81 GB | **4 GB** |
-| `EMBED_MULTILINGUAL=false` | bge-base only | **0.56 GB** | 0.57 GB | **1–2 GB** |
+| Models loaded | Peak RSS | Steady | Instance to pick |
+|---|---|---|---|
+| bge-base only | **0.75 GB** | 0.57 GB | **1–2 GB** |
 
-Do not put the multilingual setting on a 2 GB instance: 1.95 GB peak leaves no
-room for the container runtime, and the OOM killer arrives mid-request. 4 GB is
-the safe tier. English-only fits 1 GB but 2 GB is the comfortable choice and
-leaves headroom for concurrency.
+1 GB fits with room to spare; 2 GB is the comfortable choice and leaves headroom
+for concurrent requests. For reference, loading bge-m3 as well peaked at 1.95 GB
+locally, which is why hosting it would mean a 4 GB instance — the cost that
+motivated the English-only decision.
 
-These figures are from an arm64 Docker Desktop build; amd64 will be in the same
-range but re-check after the first deploy rather than assuming.
+Figures are from an arm64 Docker Desktop build; amd64 will be in the same range
+but re-check after the first deploy rather than assuming.
 
 4. After the first boot, check the logs for the three startup lines:
    ```
@@ -144,29 +152,16 @@ range but re-check after the first deploy rather than assuming.
 5. Smoke test:
    ```bash
    curl -s https://<service>.onrender.com/health
+   # expect models: ["BAAI/bge-base-en-v1.5"]
+
    curl -s -X POST https://<service>.onrender.com/search/vibe \
      -H 'Content-Type: application/json' \
      -d '{"query":"late night drive, windows down, a little sad"}'
    ```
-   `/health` should list exactly the models you expect for the setting.
 
 ---
 
-## 3. Switching between the two modes
-
-**Down to English-only** (cheaper instance): set `EMBED_MULTILINGUAL=false`,
-redeploy, resize the instance down. Optionally drop `embedding_multi` on Neon to
-reclaim storage. Non-English queries still work — the language is still detected
-and reported — but they are embedded with the English model and get no language
-boost, so quality on pl/de/es drops.
-
-**Up to multilingual**: the column and its index must exist on the database. If
-you dropped them, re-restore `passages` from a fresh dump, rebuild the HNSW
-index, then set `EMBED_MULTILINGUAL=true` and resize up to 4 GB.
-
----
-
-## 4. Notes
+## 3. Notes
 
 - The app opens a new Postgres connection per request. Fine locally (~0.1 s per
   query) but Neon adds round-trip latency and has connection limits; if the
@@ -178,3 +173,7 @@ index, then set `EMBED_MULTILINGUAL=true` and resize up to 4 GB.
 - Free-tier Neon suspends idle databases; the first query after a suspension pays
   a wake-up delay. A paid Render instance does not sleep, so the model load cost
   is paid once at deploy.
+- Local development keeps full multilingual routing: with `EMBED_MULTILINGUAL`
+  unset the app defaults to true, loads bge-m3, and routes pl/de/es queries to it
+  with the +0.1 language boost. The eval numbers in the README were produced that
+  way, so hosted quality on non-English queries is below what the eval reports.
