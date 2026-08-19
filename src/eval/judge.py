@@ -151,12 +151,21 @@ PROMPT_TEMPLATE = PROMPT_TEMPLATES[PROMPT_VERSION]
 # groq_client, which fires if a response ever hits the ceiling.
 JUDGE_MAX_TOKENS = 150
 
+# Budget for the final attempt when the normal one keeps coming back unparseable.
+# gpt-oss spends reasoning from the same allowance, so the usual suspect is a
+# response truncated before the digit was emitted.
+JUDGE_RETRY_MAX_TOKENS = 400
+
 # Deliberately empty. Drawing few-shot examples from the calibration set and
 # then measuring kappa on that same set is training on the test set: the score
 # would rise partly because the judge had been shown the answers. Adding
 # examples requires held-out pairs first.
 # Each entry would be: (query, artist, title, passage_text, grade).
 FEW_SHOT_EXAMPLES: list[tuple[str, str, str, str, int]] = []
+
+
+class JudgeError(RuntimeError):
+    """The judge could not produce a parseable grade for a pair."""
 
 
 @dataclass(frozen=True)
@@ -295,22 +304,24 @@ class JudgeCache:
 def judge_pair(
     pair: JudgePair, model: str = DEFAULT_MODEL, version: str | None = None
 ) -> int:
-    """Grade one pair with a live LLM call (no cache). Retries once on garbage.
+    """Grade one pair with a live LLM call (no cache).
 
-    Two failure modes, handled differently on purpose:
+    Three attempts: two at the normal token budget, then one at
+    JUDGE_RETRY_MAX_TOKENS in case the answer was being truncated by reasoning
+    tokens. Nothing is ever silently graded 0.
 
-    - A malformed response is retried once, then recorded as 0 and logged. One
-      bad completion should not end a 1000-judgment run.
-    - A GroqError propagates. It usually means the quota is gone, and every
-      subsequent call would fail the same way; defaulting those to 0 would write
-      hundreds of fake "not relevant" grades into the cache permanently and make
-      retrieval look catastrophically broken. Aborting is recoverable - the cache
-      flushes every 20 judgments, so a re-run resumes from the last flush.
+    Both failure modes raise rather than fabricate a grade. A cached 0 is
+    indistinguishable from a genuine "not relevant" judgment, so a fabricated
+    one is permanent, invisible, and drags every metric down with no way to find
+    it later. Aborting is recoverable: the cache flushes every 20 judgments, so
+    a re-run resumes from the last flush.
     """
     prompt = build_prompt(pair, version)
-    for attempt in range(2):
+    budgets = [JUDGE_MAX_TOKENS, JUDGE_MAX_TOKENS, JUDGE_RETRY_MAX_TOKENS]
+
+    for attempt, budget in enumerate(budgets, 1):
         try:
-            response = chat(prompt, model=model, max_completion_tokens=JUDGE_MAX_TOKENS)
+            response = chat(prompt, model=model, max_completion_tokens=budget)
         except GroqError as exc:
             raise GroqError(f"judging {pair.cache_key} failed: {exc}") from exc
         grade = parse_grade(response)
@@ -318,14 +329,16 @@ def judge_pair(
             return grade
         print(
             f"judge: unparseable response for {pair.cache_key} "
-            f"(attempt {attempt + 1}): {response[:120]!r}",
+            f"(attempt {attempt}/{len(budgets)}, budget {budget}): "
+            f"{response[:120]!r}",
             file=sys.stderr,
         )
-    print(
-        f"judge: unparseable twice, defaulting {pair.cache_key} to grade 0",
-        file=sys.stderr,
+
+    raise JudgeError(
+        f"{pair.cache_key}: no parseable grade after {len(budgets)} attempts "
+        f"(final budget {JUDGE_RETRY_MAX_TOKENS}). Refusing to cache a "
+        f"fabricated 0."
     )
-    return 0
 
 
 def judge_pairs(

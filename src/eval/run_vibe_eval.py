@@ -273,13 +273,13 @@ def main() -> None:
     parser.add_argument(
         "--min-interval",
         type=float,
-        default=7.0,
+        default=1.0,
         metavar="SECONDS",
         help=(
-            "Minimum gap between judge API calls (default: 7). Groq allows 8,000 "
-            "tokens/min for this model, which binds long before the request limit; "
-            "7s keeps a run under it instead of collecting 429s. Cached pairs are "
-            "free and are not throttled."
+            "Minimum gap between judge API calls (default: 1). The account's "
+            "observed ceiling is 250,000 tokens/min, so a ~600-token judge call "
+            "leaves ample headroom at 1s. Raise it on a tighter tier. Cached "
+            "pairs are free and are not throttled."
         ),
     )
     parser.add_argument(

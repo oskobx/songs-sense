@@ -13,13 +13,15 @@ _LANG_TO_ISO: dict[Language, str] = {
     Language.ENGLISH: "en",
     Language.POLISH: "pl",
     Language.GERMAN: "de",
+    Language.SPANISH: "es",
 }
 
-_detector = (
-    LanguageDetectorBuilder.from_languages(
-        Language.ENGLISH, Language.POLISH, Language.GERMAN
-    ).build()
-)
+# Languages served by bge-m3 rather than the English-only bge-base.
+MULTILINGUAL_ISO: tuple[str, ...] = ("pl", "de", "es")
+
+_detector = LanguageDetectorBuilder.from_languages(
+    Language.ENGLISH, Language.POLISH, Language.GERMAN, Language.SPANISH
+).build()
 
 _bge_base: SentenceTransformer | None = None
 _bge_m3: BGEM3FlagModel | None = None
@@ -37,7 +39,11 @@ def detect_query(query: str) -> tuple[str, str | None]:
 
 def detected_label(query: str) -> str:
     detected = _detector.detect_language_of(query)
-    return detected.name.capitalize() if detected is not None else "Unknown (→ English fallback)"
+    return (
+        detected.name.capitalize()
+        if detected is not None
+        else "Unknown (→ English fallback)"
+    )
 
 
 def _ensure_bge_base() -> SentenceTransformer:
@@ -63,9 +69,11 @@ def semantic_search(
     top_k: int = 100,
 ) -> list[tuple[int, float]]:
     """Return [(passage_id, similarity), ...] sorted by similarity desc."""
-    if query_lang in ("pl", "de"):
+    if query_lang in MULTILINGUAL_ISO:
         model = _ensure_bge_m3()
-        vec = model.encode([query], batch_size=1, max_length=512)["dense_vecs"][0].tolist()
+        vec = model.encode([query], batch_size=1, max_length=512)["dense_vecs"][
+            0
+        ].tolist()
         column = "embedding_multi"
     else:
         model = _ensure_bge_base()

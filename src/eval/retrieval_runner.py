@@ -19,7 +19,12 @@ import psycopg
 from dotenv import load_dotenv
 from pgvector.psycopg import register_vector
 
-from src.retrieval.semantic import LANG_BOOST, detect_query, semantic_search
+from src.retrieval.semantic import (
+    LANG_BOOST,
+    MULTILINGUAL_ISO,
+    detect_query,
+    semantic_search,
+)
 
 load_dotenv()
 
@@ -117,9 +122,11 @@ def config_description(note: str | None = None) -> str:
 
     Comparing runs across changes is guesswork without it.
     """
+    # Derived, not hardcoded: a stale config line is worse than none, because it
+    # is believed. Adding a language to the router updates this automatically.
     base = (
         f"mode={RETRIEVAL_MODE} semantic-only | "
-        f"en=bge-base-en-v1.5, pl/de=bge-m3 (dense) | "
+        f"en=bge-base-en-v1.5, {'/'.join(MULTILINGUAL_ISO)}=bge-m3 (dense) | "
         f"language boost +{LANG_BOOST} | no reranker"
     )
     return f"{base} | {note}" if note else base
