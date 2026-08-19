@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>songs-sense — Vibe Search</title>
+<style>
+  :root {
+    --bg: #fdfdfc;
+    --fg: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #e2e2df;
+    --field: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a;
+      --fg: #e8e8e6;
+      --muted: #9a9a96;
+      --line: #2e2e34;
+      --field: #1e1e23;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 40rem; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .25rem; font-weight: 600; }
+  .tagline { margin: 0 0 1.75rem; color: var(--muted); }
+  form { display: flex; gap: .5rem; }
+  input, button {
+    font: inherit;
+    padding: .6rem .75rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--fg);
+  }
+  input { flex: 1; min-width: 0; background: var(--field); }
+  input:focus-visible, button:focus-visible { outline: 2px solid #6b8afd; outline-offset: 1px; }
+  button { background: var(--field); cursor: pointer; white-space: nowrap; }
+  button[disabled] { color: var(--muted); cursor: default; }
+  #status { margin: 1.25rem 0 0; color: var(--muted); }
+  #lang { margin: 1.5rem 0 .5rem; font-size: .8rem; color: var(--muted); }
+  ol { margin: 0; padding: 0; list-style: none; counter-reset: hit; }
+  li {
+    counter-increment: hit;
+    padding: .9rem 0;
+    border-top: 1px solid var(--line);
+  }
+  .song { font-weight: 600; }
+  .song::before { content: counter(hit) ". "; color: var(--muted); font-weight: 400; }
+  .year { color: var(--muted); font-weight: 400; }
+  .passage {
+    margin-top: .35rem;
+    color: var(--muted);
+    white-space: pre-line;
+    font-size: .95rem;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>songs-sense — Vibe Search</h1>
+  <p class="tagline">Describe a feeling, get songs.</p>
+
+  <form id="search">
+    <input id="query" type="text" autocomplete="off" autofocus
+           placeholder="late night drive, windows down, a little sad"
+           aria-label="Describe a vibe">
+    <button id="submit" type="submit">Search</button>
+  </form>
+
+  <p id="status" hidden></p>
+  <p id="lang" hidden></p>
+  <ol id="results" aria-live="polite"></ol>
+</main>
+
+<script>
+  const form = document.getElementById("search");
+  const input = document.getElementById("query");
+  const button = document.getElementById("submit");
+  const statusEl = document.getElementById("status");
+  const langEl = document.getElementById("lang");
+  const list = document.getElementById("results");
+
+  const LANGUAGES = { en: "English", pl: "Polish", de: "German", es: "Spanish" };
+
+  function setStatus(text) {
+    statusEl.textContent = text || "";
+    statusEl.hidden = !text;
+  }
+
+  function render(data) {
+    langEl.textContent = "Detected language: " +
+      (LANGUAGES[data.detected_language] || data.detected_language);
+    langEl.hidden = false;
+
+    for (const result of data.results) {
+      const item = document.createElement("li");
+
+      const song = document.createElement("div");
+      song.className = "song";
+      song.textContent = result.artist + " — " + result.title;
+      if (result.year) {
+        const year = document.createElement("span");
+        year.className = "year";
+        year.textContent = " (" + result.year + ")";
+        song.appendChild(year);
+      }
+
+      const passage = document.createElement("div");
+      passage.className = "passage";
+      passage.textContent = result.passage;
+
+      item.append(song, passage);
+      list.appendChild(item);
+    }
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+
+    button.disabled = true;
+    langEl.hidden = true;
+    list.replaceChildren();
+    setStatus("searching…");
+
+    try {
+      const response = await fetch("/search/vibe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: query }),
+      });
+      if (!response.ok) throw new Error("server returned " + response.status);
+
+      const data = await response.json();
+      if (!data.results.length) {
+        setStatus("No matches found.");
+        return;
+      }
+      setStatus(null);
+      render(data);
+    } catch (error) {
+      setStatus("Search failed — " + error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
