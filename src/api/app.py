@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -107,9 +108,50 @@ def _connect() -> psycopg.Connection:
     url = os.environ.get("DATABASE_URL")
     if not url:
         raise RuntimeError("DATABASE_URL is not set")
-    conn = psycopg.connect(url)
+    # autocommit because every query here is a read: without it psycopg opens a
+    # transaction on first execute and holds it open between requests, leaving
+    # the session idle-in-transaction on the server.
+    conn = psycopg.connect(url, autocommit=True)
     register_vector(conn)
     return conn
+
+
+_connection: psycopg.Connection | None = None
+_connection_lock = threading.Lock()
+
+
+def get_connection() -> psycopg.Connection:
+    """Return the process-wide connection, opening or replacing it as needed.
+
+    ONE connection is shared by every request. That assumes a SINGLE uvicorn
+    worker, which is what the deployment runs — add a real pool (psycopg_pool)
+    before adding workers or this becomes the bottleneck.
+
+    Sharing is safe because psycopg serialises operations on a connection with
+    an internal lock, so concurrent threads from FastAPI's threadpool queue
+    rather than corrupt each other. It is also cheap: a search is ~1 ms of
+    database work against ~0.5 s of embedding and network, so the queue is
+    effectively never contended.
+
+    The connection is re-opened if it has been closed or broken — Neon drops
+    idle sessions, and without this every request after the first drop would
+    fail for the life of the process.
+    """
+    global _connection
+    with _connection_lock:
+        if _connection is None or _connection.closed or _connection.broken:
+            if _connection is not None:
+                logger.info("database connection was lost; reconnecting")
+            _connection = _connect()
+        return _connection
+
+
+def close_connection() -> None:
+    global _connection
+    with _connection_lock:
+        if _connection is not None and not _connection.closed:
+            _connection.close()
+        _connection = None
 
 
 def vibe_search(query: str, k: int) -> tuple[str, list[SearchResult]]:
@@ -121,21 +163,35 @@ def vibe_search(query: str, k: int) -> tuple[str, list[SearchResult]]:
     # of the same song, and we need k *distinct* songs after aggregation.
     depth = min(max(k * 4, 40), 200)
 
-    with _connect() as conn:
-        scored = semantic_search(conn, query, routing_lang, top_k=depth)
-        if not scored:
-            return detected or "unknown", []
+    # One retry on a dead connection. psycopg only marks a connection broken
+    # *after* an operation on it fails, so a session dropped while idle - which
+    # is how Neon reclaims them - is indistinguishable from a live one until the
+    # next query. Without this, the first request after every drop 500s.
+    for attempt in (1, 2):
+        conn = get_connection()
+        try:
+            scored = semantic_search(conn, query, routing_lang, top_k=depth)
+            if not scored:
+                return detected or "unknown", []
+            rows = conn.execute(
+                """
+                SELECT p.id, s.artist, s.title, s.year, p.passage_text
+                FROM passages p
+                JOIN songs s ON p.song_id = s.id
+                WHERE p.id = ANY(%s)
+                """,
+                ([pid for pid, _ in scored],),
+            ).fetchall()
+            break
+        except (psycopg.OperationalError, psycopg.InterfaceError) as exc:
+            if attempt == 2:
+                raise
+            logger.warning(
+                "database call failed (%s); retrying on a new connection", exc
+            )
+            close_connection()
 
-        order = {pid: i for i, (pid, _) in enumerate(scored)}
-        rows = conn.execute(
-            """
-            SELECT p.id, s.artist, s.title, s.year, p.passage_text
-            FROM passages p
-            JOIN songs s ON p.song_id = s.id
-            WHERE p.id = ANY(%s)
-            """,
-            ([pid for pid, _ in scored],),
-        ).fetchall()
+    order = {pid: i for i, (pid, _) in enumerate(scored)}
 
     score_by_id = dict(scored)
     rows.sort(key=lambda r: order.get(r[0], len(order)))
@@ -196,8 +252,8 @@ async def lifespan(app: FastAPI):
 
     started = time.monotonic()
     try:
-        with _connect() as conn:
-            passages = conn.execute("SELECT count(*) FROM passages").fetchone()[0]
+        conn = get_connection()
+        passages = conn.execute("SELECT count(*) FROM passages").fetchone()[0]
         logger.info(
             "database ready in %.2fs (%s passages)",
             time.monotonic() - started,
@@ -207,7 +263,10 @@ async def lifespan(app: FastAPI):
         logger.error("database unavailable at startup: %s", exc)
 
     app.state.models = loaded
-    yield
+    try:
+        yield
+    finally:
+        close_connection()
 
 
 app = FastAPI(title="songs-sense", version="0.1.0", lifespan=lifespan)

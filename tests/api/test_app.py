@@ -130,3 +130,58 @@ def test_multilingual_defaults_to_on(monkeypatch):
 def test_routing_language(monkeypatch, detected, multilingual, expected):
     monkeypatch.setenv("EMBED_MULTILINGUAL", "true" if multilingual else "false")
     assert api._routing_language(detected) == expected
+
+
+def test_vibe_search_retries_once_on_dead_connection(monkeypatch):
+    """A session dropped while idle must cost a retry, not a 500.
+
+    psycopg only marks a connection broken after an operation on it fails, so
+    the first query after a drop always raises. Neon reclaims idle sessions, so
+    this is the normal steady-state failure, not an edge case.
+    """
+    import psycopg
+
+    class FakeConn:
+        def execute(self, *args, **kwargs):
+            class R:
+                def fetchall(self):
+                    return [(7, "Artist", "Title", 1999, "a passage")]
+
+            return R()
+
+    attempts = {"n": 0}
+    closed = {"n": 0}
+
+    def flaky_search(conn, query, lang, top_k):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise psycopg.OperationalError(
+                "terminating connection due to administrator command"
+            )
+        return [(7, 0.9)]
+
+    monkeypatch.setattr(api, "get_connection", lambda: FakeConn())
+    monkeypatch.setattr(api, "semantic_search", flaky_search)
+    monkeypatch.setattr(
+        api, "close_connection", lambda: closed.__setitem__("n", closed["n"] + 1)
+    )
+
+    detected, results = api.vibe_search("late night drive", 10)
+
+    assert attempts["n"] == 2, "should have retried exactly once"
+    assert closed["n"] == 1, "should have dropped the dead connection before retrying"
+    assert [r.artist for r in results] == ["Artist"]
+
+
+def test_vibe_search_gives_up_after_second_failure(monkeypatch):
+    import psycopg
+
+    def always_dead(conn, query, lang, top_k):
+        raise psycopg.OperationalError("connection is dead")
+
+    monkeypatch.setattr(api, "get_connection", lambda: object())
+    monkeypatch.setattr(api, "semantic_search", always_dead)
+    monkeypatch.setattr(api, "close_connection", lambda: None)
+
+    with pytest.raises(psycopg.OperationalError):
+        api.vibe_search("late night drive", 10)

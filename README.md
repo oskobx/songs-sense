@@ -146,7 +146,8 @@ Measured against the live instance:
 A paid Render instance does not sleep, so there is no cold start in normal
 operation — the ~1 s model load is paid once per deploy. Most of the per-search
 time is not the vector search, which takes about 1 ms server-side; it is network
-round trips, since the app opens a fresh connection to Neon per request.
+round trips to Neon. The app holds one database connection for the life of the
+process, which assumes a single worker.
 
-Cost is roughly $25/month for hosting, plus cents of Groq API usage when the eval
-harness runs.
+Cost is about $25/month for the Render instance, plus a few dollars a month of
+Neon and Groq usage.
