@@ -101,6 +101,8 @@ all 114 queries.
   changed against a 26% baseline churn from judge nondeterminism, so roughly 30
   were real repairs. Individual entries cannot be attributed.
 - Covers Vibe Search only. Find the Song and Lyric Twin are unevaluated.
+- Lyric excerpts in the committed eval files are truncated to two lines; the
+  full passages exist only in the database.
 
 ### Running it
 
