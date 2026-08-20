@@ -185,3 +185,22 @@ def test_vibe_search_gives_up_after_second_failure(monkeypatch):
 
     with pytest.raises(psycopg.OperationalError):
         api.vibe_search("late night drive", 10)
+
+
+def test_health_reports_the_running_commit(no_models, monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "abcdef1234567890")
+    with TestClient(api.app) as client:
+        body = client.get("/health").json()
+    assert body["commit"] == "abcdef123456"  # truncated to 12 chars
+    assert set(body) == {"status", "models", "commit"}
+
+
+def test_health_commit_falls_back(no_models, monkeypatch):
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.setenv("GIT_COMMIT", "deadbeef")
+    with TestClient(api.app) as client:
+        assert client.get("/health").json()["commit"] == "deadbeef"
+
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    with TestClient(api.app) as client:
+        assert client.get("/health").json()["commit"] == "unknown"

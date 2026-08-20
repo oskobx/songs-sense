@@ -48,6 +48,22 @@ STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
 
 
+def running_commit() -> str:
+    """Short SHA of the running build, or "unknown".
+
+    Render injects RENDER_GIT_COMMIT automatically for repo-deployed services,
+    so this needs no build plumbing there. GIT_COMMIT is the escape hatch for
+    images built elsewhere (the Dockerfile takes it as a build arg). Without
+    this, the only way to tell which commit is live is to infer it from
+    behaviour, which is exactly as unpleasant as it sounds.
+    """
+    for var in ("RENDER_GIT_COMMIT", "GIT_COMMIT"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value[:12]
+    return "unknown"
+
+
 def embed_multilingual_enabled() -> bool:
     """EMBED_MULTILINGUAL=false keeps bge-m3 (~1 GB) out of memory in production."""
     raw = os.environ.get("EMBED_MULTILINGUAL", "true").strip().lower()
@@ -82,6 +98,7 @@ class SearchResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     models: list[str]
+    commit: str
 
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +280,7 @@ async def lifespan(app: FastAPI):
         logger.error("database unavailable at startup: %s", exc)
 
     app.state.models = loaded
+    logger.info("serving commit %s", running_commit())
     try:
         yield
     finally:
@@ -277,7 +295,11 @@ if STATIC_DIR.is_dir():
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", models=getattr(app.state, "models", []))
+    return HealthResponse(
+        status="ok",
+        models=getattr(app.state, "models", []),
+        commit=running_commit(),
+    )
 
 
 @app.post("/search/vibe", response_model=SearchResponse)

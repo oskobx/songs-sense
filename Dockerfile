@@ -55,6 +55,12 @@ COPY static/ ./static/
 
 # English-only: bge-m3 is not in this image, so it must not be loaded.
 ENV EMBED_MULTILINGUAL=false
+
+# Stamp the build so /health can report which commit is running. Render injects
+# RENDER_GIT_COMMIT at runtime and needs no arg; this is for images built
+# elsewhere: docker build --build-arg GIT_COMMIT=$(git rev-parse --short HEAD)
+ARG GIT_COMMIT=""
+ENV GIT_COMMIT=$GIT_COMMIT
 EXPOSE 8000
 
 # Render supplies $PORT; default to 8000 for local runs.

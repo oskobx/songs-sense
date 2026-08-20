@@ -139,15 +139,23 @@ Measured against the live instance:
 
 | Request | Warm |
 |---|---|
-| `POST /search/vibe` | 0.86–1.59 s (median ~1.1 s) |
-| `GET /` | 0.48 s |
-| `GET /health` | 0.20 s |
+| `POST /search/vibe` | 0.90–1.61 s (median ~1.1 s, n=8 distinct queries) |
+| `GET /` | 0.17 s |
+| `GET /health` | 0.16 s |
 
 A paid Render instance does not sleep, so there is no cold start in normal
-operation — the ~1 s model load is paid once per deploy. Most of the per-search
-time is not the vector search, which takes about 1 ms server-side; it is network
-round trips to Neon. The app holds one database connection for the life of the
-process, which assumes a single worker.
+operation — the ~1 s model load is paid once per deploy.
+
+Almost none of the ~1 s is the vector search, which takes about 1 ms
+server-side, and about 0.16 s is network to Render. The rest is query embedding
+on the instance plus app-to-database round trips. The app holds one database
+connection for the life of the process rather than opening one per request,
+which assumes a single worker; that removed a connection setup per request but
+did not measurably change end-to-end latency, so the remaining time is compute,
+not connection overhead.
+
+`GET /health` reports the running commit, so which build is live is a question
+you can answer with one request.
 
 Cost is about $25/month for the Render instance, plus a few dollars a month of
 Neon and Groq usage.
