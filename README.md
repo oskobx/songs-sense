@@ -8,7 +8,7 @@ search is actually any good instead of assuming it is.
 
 **Live demo — <https://songs-sense.onrender.com>**
 
-![songs-sense vibe search](docs/img/screenshot.png)
+<img src="docs/img/screenshot.png" width="700" alt="songs-sense Vibe Search UI">
 
 Three retrieval modes exist. **Vibe Search** is the one exposed in the UI.
 **Find the Song** (half-remembered lyrics) and **Lyric Twin** (closest real
