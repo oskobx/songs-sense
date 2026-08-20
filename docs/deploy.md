@@ -1,7 +1,7 @@
 # Deployment — Neon + Render
 
-Manual steps, in order. Nothing here is automated; run it once and note anything
-that drifts.
+Manual steps, in order. The Neon half has been run; timings below are measured,
+not estimated. The Render half has not been run yet.
 
 Two moving parts: Postgres with pgvector on **Neon**, and the FastAPI app as a
 Docker service on **Render**.
@@ -15,129 +15,145 @@ the flag defaults to true.
 
 ---
 
-## 0. Postgres client tools
+## 0. Client tools and the connection string
 
 **There is no `psql`, `pg_dump` or `pg_restore` on this machine.** Every command
-below therefore borrows them from the running Postgres container, which has all
-three at the same version that produced the dump:
+below borrows them from the running Postgres container, which has all three at
+the same version that produced the dump:
 
 ```bash
 docker exec -i songs-sense-db psql "$NEON_URL" -c "SELECT 1;"
 ```
 
-`docker exec -i` (not `-it`) is what lets you pipe a dump file in on stdin. The
-container has working DNS and can reach Neon directly.
+Use `docker exec -i`, not `-it` — the `-i` is what lets you pipe a dump in on
+stdin, and `-t` breaks piping. The container has working DNS and reaches Neon
+directly. To install natively instead: `brew install libpq`, then add
+`/opt/homebrew/opt/libpq/bin` to `PATH`. Nothing here requires it.
 
-If you would rather install them natively: `brew install libpq` and add
-`/opt/homebrew/opt/libpq/bin` to your `PATH`. Nothing here requires it.
+Put the connection string in `.env` as `NEON_URL=...` (gitignored). **Do not
+`source .env`**: Neon's URL ends in `?sslmode=require&channel_binding=require`,
+and the unquoted `&` is a syntax error in zsh. Read just that one value:
 
-Put the Neon connection string in `.env` as `NEON_URL=...` (the file is
-gitignored) and load it with `set -a; . ./.env; set +a` before running these.
+```bash
+NEON_URL="$(grep -E '^NEON_URL=' .env | head -1 | cut -d= -f2-)"
+```
 
-Other prerequisites: the code must be pushed to GitHub — Render builds from the
-repo, not from your working tree.
+Use the **direct** connection string for restores. Neon's pooled endpoint is for
+the app's many short connections, not for one long `pg_restore`.
+
+Other prerequisites: push to GitHub — Render builds from the repo, not your
+working tree.
 
 ---
 
 ## 1. Export
 
 ```bash
-./scripts/export_for_neon.sh
+./scripts/export_for_neon.sh          # ~2 min, writes data/neon/
 ```
 
-Writes `data/neon/01_extension.sql` and `data/neon/02_songs_passages_nomulti.dump`.
+Produces `01_extension.sql` and `02_songs_passages_lean.dump` (**314.8 MB**).
 
-The default dump **excludes `embedding_multi` and its HNSW index**. This is the
-normal path, not a fallback: production is English-only, and that column plus its
-index is more than half the restored size. Stripping before upload beats
-restoring everything and dropping it afterwards, which risks running out of
-storage mid-restore and wastes a long upload.
+The default dump strips two things the hosted app never reads:
 
-The strip happens on a throwaway `TEMPLATE` copy of the local database, so your
-local data is untouched and every other index, constraint and trigger survives.
-Use `--with-multi` when you want a complete backup instead.
-
-### Will it fit?
-
-Measured by restoring the stripped dump into a fresh local database — the same
-thing Neon will hold:
-
-| | Size |
+| Dropped | Why |
 |---|---|
-| Stripped dump file (compressed) | 325 MB |
-| **Restored database** | **751 MB** |
-| — `passages` table + indexes | 729 MB |
-| — of which HNSW index on `embedding` | 323 MB |
-| — `songs` table | 14 MB |
+| `embedding_multi` + its HNSW index | bge-m3 vectors; production is English-only. Over half the restored size. |
+| `passage_tsv` + its GIN index + trigger | Full-text column for BM25, used only by the unexposed "Find the Song" profile. |
 
-For comparison, the unstripped dump is 730 MB as a file and would restore to
-roughly 1.7 GB.
+Stripping happens *before* upload, on a throwaway `TEMPLATE` clone of the local
+database — your local data is untouched, and every other index, constraint and
+trigger survives. Doing it this way rather than dropping columns after the
+restore matters: `DROP COLUMN` does not reclaim space without a `VACUUM FULL`,
+which is slow on a small instance and can run you out of storage mid-restore.
 
-**Check the 751 MB against your Neon plan's storage allowance before uploading.**
-If it does not fit, in order of cost:
+`--with-multi` and `--with-fts` each put one back; pass both for a full backup.
 
-1. Drop the full-text column too — `passage_tsv` and its GIN index are ~35 MB and
-   only serve BM25, which the API does not expose:
-   ```sql
-   DROP INDEX passages_passage_tsv_idx;
-   ALTER TABLE passages DROP COLUMN passage_tsv;
-   ```
-2. Restore a subset of songs. Roughly half the corpus lands near 390 MB. Filter
-   by `tier` so the demo keeps the recognisable songs.
-3. Move to a paid plan.
+For reference: full dump 730 MB (restores to ~1.7 GB), multi-stripped only
+325 MB, lean 314.8 MB.
 
 ---
 
-## 2. Neon
+## 2. Neon — measured run
 
-1. Create a Neon project. Note the connection string — it looks like
-   `postgresql://user:pass@ep-xxx.region.aws.neon.tech/neondb?sslmode=require`.
-   Pick the region closest to where Render will run.
-2. Enable pgvector:
-   ```bash
-   docker exec -i songs-sense-db psql "$NEON_URL" -f - < data/neon/01_extension.sql
-   ```
-3. Restore. This uploads ~325 MB and then rebuilds the HNSW index server-side, so
-   expect it to take a while:
-   ```bash
-   docker exec -i songs-sense-db pg_restore --no-owner --no-privileges \
-     -d "$NEON_URL" < data/neon/02_songs_passages_nomulti.dump
-   ```
-   Pass `-U postgres` only when restoring into a *local* database; the Neon URL
-   already carries its own user.
-4. Verify:
-   ```bash
-   docker exec -i songs-sense-db psql "$NEON_URL" -c "
-     SELECT (SELECT count(*) FROM songs)    AS songs,
-            (SELECT count(*) FROM passages) AS passages,
-            pg_size_pretty(pg_database_size(current_database())) AS size;"
-   ```
-   Expect 9381 songs and 85879 passages.
-5. Confirm the HNSW index came across — `pg_restore` normally carries it:
-   ```bash
-   docker exec -i songs-sense-db psql "$NEON_URL" -c "\di+ passages*"
-   # if passages_embedding_hnsw_idx is missing:
-   docker exec -i songs-sense-db psql "$NEON_URL" -c "
-     CREATE INDEX passages_embedding_hnsw_idx
-       ON passages USING hnsw (embedding vector_cosine_ops)
-       WITH (m = 16, ef_construction = 64);"
-   ```
-6. Smoke-test a vector query before wiring the app:
-   ```bash
-   docker exec -i songs-sense-db psql "$NEON_URL" -tAc "
-     SELECT s.artist || ' — ' || s.title
-     FROM passages p JOIN songs s ON p.song_id = s.id
-     ORDER BY p.embedding <=> (SELECT embedding FROM passages LIMIT 1) LIMIT 3;"
-   ```
+Plan: **Launch**, compute capped at 0.5 CU, region `us-west-2`, Postgres 16.15,
+pgvector 0.8.0.
+
+```bash
+NEON_URL="$(grep -E '^NEON_URL=' .env | head -1 | cut -d= -f2-)"
+
+# 1. extension — 2s
+docker exec -i songs-sense-db psql "$NEON_URL" -v ON_ERROR_STOP=1 \
+  -f - < data/neon/01_extension.sql
+
+# 2. restore — 396s (data loaded by ~100s, the rest is the HNSW build)
+docker exec -i songs-sense-db pg_restore --no-owner --no-privileges --verbose \
+  -d "$NEON_URL" < data/neon/02_songs_passages_lean.dump
+
+# 3. verify
+docker exec -i songs-sense-db psql "$NEON_URL" -c "
+  SELECT (SELECT count(*) FROM songs)                                AS songs,
+         (SELECT count(*) FROM passages)                             AS passages,
+         (SELECT count(*) FROM passages WHERE embedding IS NOT NULL) AS with_embedding,
+         pg_size_pretty(pg_database_size(current_database()))        AS size;"
+
+# 4. confirm the HNSW index arrived (it does; pg_restore carries it)
+docker exec -i songs-sense-db psql "$NEON_URL" -c "\di+ passages*"
+```
+
+Pass `-U postgres` only when restoring into a *local* database — the Neon URL
+carries its own user. Omitting it locally makes `pg_restore` connect as `root`
+and fail.
+
+Result:
+
+| | |
+|---|---|
+| songs / passages | 9381 / 85879, all 85879 with embeddings |
+| database size | **714 MB** |
+| `passages` | 693 MB (HNSW on `embedding`: 323 MB) |
+| `songs` | 14 MB |
+| indexes present | `passages_embedding_hnsw_idx`, `passages_pkey`, `passages_song_id_idx`, `passages_language_idx`, FK to `songs` |
+
+No index rebuild was needed. If `passages_embedding_hnsw_idx` were ever missing:
+
+```sql
+CREATE INDEX passages_embedding_hnsw_idx ON passages
+  USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+```
+
+### Latency — this decides the Render region
+
+Measured from a laptop in Massachusetts against `us-west-2`:
+
+| | |
+|---|---|
+| Round trip (`SELECT 1`) | 101 ms |
+| ANN search over 85,879 rows | 102 ms |
+| **Query work minus network** | **1 ms** |
+
+The vector search costs about a millisecond. Everything else is round-trip
+latency. Two consequences:
+
+- **Create the Render service in Oregon (`us-west`)**, next to the database. From
+  Massachusetts a search took ~620 ms end to end; colocated it should be tens of
+  milliseconds. If Render must live on the East Coast, move the Neon project
+  instead.
+- The 0.5 CU compute cap is **not** a bottleneck for this workload. Don't pay to
+  raise it.
+
+The app also opens a new connection per request, so each search pays a fresh
+handshake. Once app and database are colocated that matters less; if it still
+shows, switch `DATABASE_URL` to Neon's pooled connection string.
 
 ---
 
-## 3. Render
+## 3. Render — not yet run
 
 1. New **Web Service** → connect the repo → runtime **Docker** (it finds the
-   `Dockerfile` at the repo root).
-2. Start command — Render injects `$PORT` and the image's `CMD` already honours
-   it, so leave it blank. Explicitly, it would be:
+   `Dockerfile` at the repo root). Region: **Oregon**, per the latency note above.
+2. Start command — Render injects `$PORT` and the image's `CMD` honours it, so
+   leave it blank. Explicitly it would be:
    ```
    uvicorn src.api.app:app --host 0.0.0.0 --port $PORT
    ```
@@ -160,21 +176,20 @@ a batch of mixed-language queries:
 | bge-base only | **0.75 GB** | 0.57 GB | **1–2 GB** |
 
 1 GB fits with room to spare; 2 GB is comfortable and leaves headroom for
-concurrent requests. Loading bge-m3 as well peaked at 1.95 GB locally, which
-would mean a 4 GB instance — the cost that motivated English-only.
+concurrency. Loading bge-m3 as well peaked at 1.95 GB locally, which would mean a
+4 GB instance — the cost that motivated English-only.
 
-Image size is 3.53 GB compressed, 6.23 GB uncompressed, of which Python
-site-packages is 5.3 GB (torch dominates) against 419 MB of model weights. Note
-`docker images` reports *disk usage including build cache*, which reads much
-higher; `docker images --tree` shows the real content size.
+Image is 3.53 GB compressed, 6.23 GB uncompressed, of which site-packages is
+5.3 GB (torch dominates) against 419 MB of weights. `docker images` reports disk
+usage including build cache and reads much higher; `docker images --tree` shows
+real content size.
 
-Build for the deploy target's architecture if you ever push a prebuilt image —
-Render is amd64, a Mac is arm64:
-`docker build --platform linux/amd64 -t songs-sense .`
+Build for the target architecture if you ever push a prebuilt image — Render is
+amd64, a Mac is arm64: `docker build --platform linux/amd64 -t songs-sense .`
 
 Do not set `EMBED_MULTILINGUAL=true` on this image: bge-m3 is not baked in, so
 the app would try to download ~2.2 GB on first boot. Add it back to the prefetch
-step in the `Dockerfile` and rebuild if you ever want multilingual hosted.
+step in the `Dockerfile` and rebuild if you want multilingual hosted.
 
 4. After the first boot, check the logs for three lines:
    ```
@@ -199,16 +214,12 @@ step in the `Dockerfile` and rebuild if you ever want multilingual hosted.
 
 ## 4. Notes
 
-- The app opens a new Postgres connection per request. Fine locally (~0.1 s per
-  query), but Neon adds round-trip latency and has connection limits. If the
-  hosted instance feels slow, switch `DATABASE_URL` to Neon's pooled connection
-  string first.
 - No autoscaling, no worker processes: one uvicorn process serving from a
   threadpool. Model inference is CPU-bound, so concurrency is limited by cores.
-- Free-tier Neon suspends idle databases; the first query after a suspension pays
-  a wake-up delay. A paid Render instance does not sleep, so the model load is
-  paid once at deploy.
+- A paid Render instance does not sleep, so the model load is paid once at deploy.
 - Local development keeps full multilingual routing: with `EMBED_MULTILINGUAL`
   unset the app defaults to true, loads bge-m3, and routes pl/de/es queries to it
-  with the +0.1 boost. The README's eval numbers were produced that way, so
-  hosted quality on non-English queries is below what the eval reports.
+  with the +0.1 boost. The README's eval numbers were produced that way, so hosted
+  quality on non-English queries is below what the eval reports.
+- The hosted database has no `passage_tsv`, so BM25 / "Find the Song" cannot run
+  against it. Re-export with `--with-fts` if that mode is ever exposed.

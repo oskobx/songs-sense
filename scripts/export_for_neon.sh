@@ -3,24 +3,30 @@
 # Dump the retrieval tables for restore into Neon, and report the size so it can
 # be checked against the hosting plan's storage limit before you upload anything.
 #
-# By default the dump EXCLUDES `embedding_multi` (bge-m3, 1024d) and its HNSW
-# index: production is English-only, that column plus its index is over half the
-# restored size, and stripping it before upload beats restoring it and dropping
-# it afterwards — a free-tier database can run out of space mid-restore.
+# By default the dump EXCLUDES two things the hosted app never reads:
+#
+#   embedding_multi + its HNSW index  — bge-m3 vectors; production is
+#     English-only, and this is over half the restored size.
+#   passage_tsv + its GIN index + trigger — full-text column serving BM25,
+#     which only the unexposed "Find the Song" profile uses.
+#
+# Stripping before upload beats restoring everything and dropping it after:
+# DROP COLUMN does not reclaim space without a VACUUM FULL, which on a small
+# hosted instance is slow and can run the database out of storage mid-restore.
 #
 # The strip is done on a throwaway TEMPLATE copy of the database, so the local
 # database is never modified and every other index, constraint and trigger
 # survives untouched.
 #
-# Use --with-multi for a complete backup of both embedding columns.
+# --with-multi and --with-fts each put one back; use both for a full backup.
 #
 # pg_dump runs inside the Postgres container: there is no local pg_dump on this
 # machine, and the server's own binary can never be too old for the server.
 #
 # Usage:
-#   scripts/export_for_neon.sh                 # stripped, custom format (default)
-#   scripts/export_for_neon.sh --with-multi    # both embedding columns
-#   scripts/export_for_neon.sh --plain         # plain SQL instead of custom
+#   scripts/export_for_neon.sh                        # lean deploy dump (default)
+#   scripts/export_for_neon.sh --with-multi --with-fts # full backup
+#   scripts/export_for_neon.sh --plain                 # plain SQL instead of custom
 #   OUT_DIR=/tmp/dump scripts/export_for_neon.sh
 #
 # Env:
@@ -41,13 +47,17 @@ EXPORT_DB="songs_sense_export"
 
 FORMAT="custom"
 WITH_MULTI="no"
+WITH_FTS="no"
 for arg in "$@"; do
   case "$arg" in
     --plain)      FORMAT="plain" ;;
     --with-multi) WITH_MULTI="yes" ;;
-    *) echo "unknown argument: $arg (expected --plain and/or --with-multi)" >&2; exit 2 ;;
+    --with-fts)   WITH_FTS="yes" ;;
+    *) echo "unknown argument: $arg (expected --plain, --with-multi, --with-fts)" >&2; exit 2 ;;
   esac
 done
+STRIP_ANY="yes"
+[[ "$WITH_MULTI" == "yes" && "$WITH_FTS" == "yes" ]] && STRIP_ANY="no"
 
 # --- database name -----------------------------------------------------------
 if [[ -z "${DATABASE_URL:-}" && -f .env ]]; then
@@ -70,7 +80,11 @@ psql_in() { docker exec -i "$PG_CONTAINER" psql -U "$DB_USER" "$@"; }
 
 mkdir -p "$OUT_DIR"
 EXT_FILE="$OUT_DIR/01_extension.sql"
-SUFFIX=""; [[ "$WITH_MULTI" == "no" ]] && SUFFIX="_nomulti"
+if   [[ "$STRIP_ANY" == "no"   ]]; then SUFFIX=""
+elif [[ "$WITH_MULTI" == "no" && "$WITH_FTS" == "no" ]]; then SUFFIX="_lean"
+elif [[ "$WITH_MULTI" == "no" ]]; then SUFFIX="_nomulti"
+else SUFFIX="_nofts"
+fi
 if [[ "$FORMAT" == "custom" ]]; then
   DUMP_FILE="$OUT_DIR/02_songs_passages${SUFFIX}.dump"
 else
@@ -84,9 +98,9 @@ psql_in -d "$DB_NAME" -tAc "
 
 # --- choose the source database ----------------------------------------------
 SOURCE_DB="$DB_NAME"
-if [[ "$WITH_MULTI" == "no" ]]; then
+if [[ "$STRIP_ANY" == "yes" ]]; then
   echo
-  echo "Building a stripped copy ($EXPORT_DB) without embedding_multi..."
+  echo "Building a stripped copy ($EXPORT_DB)..."
   # TEMPLATE copy is a file-level clone: fast, and it carries every index,
   # constraint and trigger, so the dump needs no manual reconstruction later.
   psql_in -d postgres -q -v ON_ERROR_STOP=1 <<SQL
@@ -95,10 +109,24 @@ SELECT pg_terminate_backend(pid) FROM pg_stat_activity
 DROP DATABASE IF EXISTS $EXPORT_DB;
 CREATE DATABASE $EXPORT_DB TEMPLATE $DB_NAME;
 SQL
-  psql_in -d "$EXPORT_DB" -q -v ON_ERROR_STOP=1 <<'SQL'
+  if [[ "$WITH_MULTI" == "no" ]]; then
+    echo "  dropping embedding_multi + its HNSW index"
+    psql_in -d "$EXPORT_DB" -q -v ON_ERROR_STOP=1 <<'SQL'
 DROP INDEX IF EXISTS passages_embedding_multi_hnsw_idx;
 ALTER TABLE passages DROP COLUMN IF EXISTS embedding_multi;
 SQL
+  fi
+  if [[ "$WITH_FTS" == "no" ]]; then
+    # The trigger must go first: it names passage_tsv as a string argument, so
+    # DROP COLUMN leaves it in place and any later insert errors on a column
+    # that no longer exists.
+    echo "  dropping passage_tsv + its GIN index + trigger"
+    psql_in -d "$EXPORT_DB" -q -v ON_ERROR_STOP=1 <<'SQL'
+DROP TRIGGER IF EXISTS passages_tsv_trigger ON passages;
+DROP INDEX IF EXISTS passages_passage_tsv_idx;
+ALTER TABLE passages DROP COLUMN IF EXISTS passage_tsv;
+SQL
+  fi
   psql_in -d "$EXPORT_DB" -tAc "
     SELECT '  columns kept: ' || string_agg(column_name, ', ' ORDER BY ordinal_position)
     FROM information_schema.columns WHERE table_name='passages';"
@@ -114,7 +142,7 @@ PG_DUMP_ARGS=(-U "$DB_USER" -d "$SOURCE_DB" --no-owner --no-privileges -t public
 [[ "$FORMAT" == "custom" ]] && PG_DUMP_ARGS+=(--format=custom --compress=9)
 docker exec -i "$PG_CONTAINER" pg_dump "${PG_DUMP_ARGS[@]}" > "$DUMP_FILE"
 
-[[ "$WITH_MULTI" == "no" ]] && psql_in -d postgres -q -c "DROP DATABASE IF EXISTS $EXPORT_DB;"
+[[ "$STRIP_ANY" == "yes" ]] && psql_in -d postgres -q -c "DROP DATABASE IF EXISTS $EXPORT_DB;"
 
 # --- report ------------------------------------------------------------------
 bytes_of() { wc -c < "$1" | tr -d ' '; }
