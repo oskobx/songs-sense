@@ -1,6 +1,37 @@
 # songs-sense
 
+**Live demo — <https://songs-sense.onrender.com>**
+
 A multi-mode music search platform: vibe search, fuzzy song retrieval, and lyric-to-text matching over a curated corpus of popular songs. Built as a portfolio project demonstrating RAG, retrieval evaluation, and embedding fine-tuning. Work in progress.
+
+## Modes
+
+**Vibe Search** is live: describe a feeling and get ranked songs with the passage
+that matched. **Find the Song** (hybrid BM25 + semantic, for half-remembered
+lyrics) and **Lyric Twin** (closest real lyric to any text) exist as retrieval
+profiles in `src/retrieval/` and are reachable from `scripts/search.py --mode`,
+but are not exposed in the web UI.
+
+## Run locally
+
+Requires Docker, Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+docker compose up -d                          # Postgres 16 + pgvector on :5432
+uv sync
+cp .env.example .env                          # fill in DATABASE_URL at minimum
+uv run uvicorn src.api.app:app --reload       # http://localhost:8000
+```
+
+| Variable | Needed for |
+|---|---|
+| `DATABASE_URL` | always |
+| `EMBED_MULTILINGUAL` | optional; defaults to `true` locally, loading bge-m3 for pl/de/es |
+| `GROQ_KEY` | the eval harness only, not the app |
+
+The corpus itself is not in the repo. Building it from scratch means running the
+`src/corpus/` and `src/embeddings/` scripts against the Genius, Spotify and
+LRClib sources, which takes hours and needs API keys.
 
 ## Phase 3b: Vibe Search evaluation
 
@@ -85,3 +116,37 @@ python -m src.eval.run_vibe_eval --note "what changed"
 
 Results land in `data/eval/results_<timestamp>.json` with per-query detail and
 the retrieval config. Needs `GROQ_KEY` in `.env` and a populated local Postgres.
+
+## Deployment
+
+Postgres on **Neon** (Launch plan, compute capped at 0.5 CU, `us-west-2`), app on
+**Render** as a Docker service. Full runbook, including the export and restore
+procedure, in [docs/deploy.md](docs/deploy.md).
+
+Production runs **English-only**. The image bakes only `bge-base-en-v1.5` and sets
+`EMBED_MULTILINGUAL=false`, which holds peak memory at 0.75 GB instead of 1.95 GB
+and roughly halves the hosted database. Non-English queries still work — the
+language is detected and reported — but they are embedded with the English model
+and get no language boost, so pl/de/es quality is below what the eval above
+reports. Multilingual routing via bge-m3 stays available locally, where the flag
+defaults to true.
+
+The hosted database is 714 MB: 9,381 songs and 85,879 passages with 768-d
+embeddings and an HNSW index, minus the bge-m3 vectors and the full-text column
+that only the unexposed BM25 profile uses.
+
+Measured against the live instance:
+
+| Request | Warm |
+|---|---|
+| `POST /search/vibe` | 0.86–1.59 s (median ~1.1 s) |
+| `GET /` | 0.48 s |
+| `GET /health` | 0.20 s |
+
+A paid Render instance does not sleep, so there is no cold start in normal
+operation — the ~1 s model load is paid once per deploy. Most of the per-search
+time is not the vector search, which takes about 1 ms server-side; it is network
+round trips, since the app opens a fresh connection to Neon per request.
+
+Cost is roughly $25/month for hosting, plus cents of Groq API usage when the eval
+harness runs.
