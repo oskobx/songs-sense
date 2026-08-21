@@ -10,6 +10,10 @@ search is actually any good instead of assuming it is.
 
 <img src="docs/img/screenshot.png" width="700" alt="songs-sense Vibe Search UI">
 
+The hosted demo runs English-only to keep hosting costs down. Multilingual
+retrieval (bge-m3 embeddings, language-aware routing across 4 languages) is
+fully implemented and runs behind the `EMBED_MULTILINGUAL` environment flag.
+
 Three retrieval modes exist. **Vibe Search** is the one exposed in the UI.
 **Find the Song** (half-remembered lyrics) and **Lyric Twin** (closest real
 lyric to any text) are implemented as retrieval profiles and reachable through
@@ -107,12 +111,12 @@ Method, prompt-version history, and how to run the harness: **[docs/evaluation.m
 Postgres with pgvector on Neon, app on Render as a Docker service. Runbook in
 [docs/deploy.md](docs/deploy.md).
 
-Production is **English-only**: the image bakes only `bge-base-en-v1.5` and sets
-`EMBED_MULTILINGUAL=false`, holding peak memory at 0.75 GB instead of 1.95 GB
-and halving the hosted database to 714 MB. Non-English queries still work and
-the language is still reported, but they are embedded with the English model and
-get no boost, so hosted pl/de/es quality is below what the eval reports.
-Multilingual routing stays available locally, where the flag defaults to true.
+What English-only costs and saves, concretely: the image bakes only
+`bge-base-en-v1.5`, which holds peak memory at 0.75 GB instead of 1.95 GB and
+halves the hosted database to 714 MB. Non-English queries still work and the
+language is still reported, but they are embedded with the English model and get
+no boost, so hosted pl/de/es quality is below what the eval reports. Locally the
+flag defaults to true and bge-m3 loads.
 
 A warm search takes ~1.1 s end to end, of which about 1 ms is the vector search
 and ~0.16 s is network; the rest is query embedding on a small instance. Cost is

@@ -45,6 +45,7 @@
   button { background: var(--field); cursor: pointer; white-space: nowrap; }
   button[disabled] { color: var(--muted); cursor: default; }
   #status { margin: 1.25rem 0 0; color: var(--muted); }
+  .note { margin: .6rem 0 0; font-size: .8rem; color: var(--muted); }
   #lang { margin: 1.5rem 0 .5rem; font-size: .8rem; color: var(--muted); }
   ol { margin: 0; padding: 0; list-style: none; counter-reset: hit; }
   li {
@@ -74,6 +75,8 @@
            aria-label="Describe a vibe">
     <button id="submit" type="submit">Search</button>
   </form>
+
+  <p class="note">Demo runs English-only for cost — multilingual search available in the full build.</p>
 
   <p id="status" hidden></p>
   <p id="lang" hidden></p>
